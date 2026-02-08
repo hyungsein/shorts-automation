@@ -12,10 +12,23 @@ from pydantic import BaseModel, Field
 
 class ContentType(str, Enum):
     """Types of content for shorts"""
-    REDDIT_STORY = "reddit_story"
-    SCARY_STORY = "scary_story"
-    FUN_FACTS = "fun_facts"
-    MOTIVATION = "motivation"
+    AUTO = "auto"  # LLM이 자동 생성 (기본값)
+    YOUTUBE_SEARCH = "youtube_search"  # YouTube 검색 참고
+    CUSTOM = "custom"  # 직접 주제 입력
+
+
+class ContentTone(str, Enum):
+    """콘텐츠 톤 - 목소리 자동 매칭용"""
+    SCARY = "scary"  # 무서운 이야기 → 차분한 남성
+    HORROR = "horror"  # 공포 → 속삭이는 남성
+    ROMANCE = "romance"  # 연애 썰 → 밝은 여성
+    FUNNY = "funny"  # 웃긴 이야기 → 발랄한 여성
+    ANGRY = "angry"  # 분노 유발 → 화난 남성
+    SAD = "sad"  # 슬픈 이야기 → 슬픈 여성
+    NEWS = "news"  # 뉴스/정보 → 차분한 남성
+    GOSSIP = "gossip"  # 가십/TMI → 흥분한 여성
+    ASMR = "asmr"  # ASMR → 속삭이는 여성
+    DEFAULT = "default"  # 기본 → 여성 스마트 감정
 
 
 class TrendData(BaseModel):
@@ -25,7 +38,7 @@ class TrendData(BaseModel):
     url: Optional[str] = None
     score: int = 0
     content: str = ""
-    content_type: ContentType = ContentType.REDDIT_STORY
+    content_type: ContentType = ContentType.AUTO
     fetched_at: datetime = Field(default_factory=datetime.now)
 
 
@@ -35,6 +48,9 @@ class Script(BaseModel):
     body: str  # Main content
     cta: str  # Call to action
     full_text: str = ""
+
+    # 콘텐츠 톤 (목소리 자동 매칭용)
+    tone: ContentTone = ContentTone.DEFAULT
 
     # Scene descriptions for image generation
     scene_prompts: list[str] = Field(default_factory=list)

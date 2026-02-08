@@ -31,14 +31,12 @@ class TTSConfig(BaseModel):
     default_voice: str = Field(default="default")
 
 
-class RedditConfig(BaseModel):
-    """Reddit API Configuration"""
-    client_id: str = Field(
-        default_factory=lambda: os.getenv("REDDIT_CLIENT_ID", ""))
-    client_secret: str = Field(
-        default_factory=lambda: os.getenv("REDDIT_CLIENT_SECRET", ""))
-    user_agent: str = Field(default_factory=lambda: os.getenv(
-        "REDDIT_USER_AGENT", "shorts-automation/1.0"))
+class YouTubeConfig(BaseModel):
+    """YouTube Data API Configuration"""
+    api_key: str = Field(
+        default_factory=lambda: os.getenv("YOUTUBE_API_KEY", ""))
+    region_code: str = Field(
+        default_factory=lambda: os.getenv("YOUTUBE_REGION", "KR"))
 
 
 class StableDiffusionConfig(BaseModel):
@@ -53,7 +51,7 @@ class Settings(BaseModel):
     # Sub-configs
     aws: AWSConfig = Field(default_factory=AWSConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
-    reddit: RedditConfig = Field(default_factory=RedditConfig)
+    youtube: YouTubeConfig = Field(default_factory=YouTubeConfig)
     sd: StableDiffusionConfig = Field(default_factory=StableDiffusionConfig)
 
     # General settings

@@ -23,45 +23,59 @@ console = Console()
 
 @app.command()
 def generate(
-    content_type: str = typer.Option(
-        "reddit_story",
-        "--type",
-        "-t",
-        help="Content type: reddit_story, scary_story, fun_facts, motivation",
-    ),
     count: int = typer.Option(
         1,
         "--count",
         "-c",
         help="Number of shorts to generate",
     ),
+    category: str = typer.Option(
+        None,
+        "--category",
+        "-cat",
+        help="Category: 인간관계, 직장생활, 연애, 심리, 공감, 레전드썰, 꿀팁, 충격",
+    ),
+    topic: str = typer.Option(
+        None,
+        "--topic",
+        "-t",
+        help="Direct topic input (e.g. '이런 친구는 손절해라')",
+    ),
+    search: str = typer.Option(
+        None,
+        "--search",
+        "-s",
+        help="YouTube search query for reference",
+    ),
     strict: bool = typer.Option(
-        True,
-        "--strict/--no-strict",
-        "-s/-ns",
-        help="Enable strict supervisor mode (default: on)",
+        False,
+        "--strict/--fast",
+        help="Strict supervisor mode (default: fast)",
     ),
 ):
-    """Generate YouTube Shorts automatically"""
+    """Generate YouTube Shorts automatically - just run it!"""
 
-    mode_text = "👨‍💼 STRICT MODE" if strict else "🚀 FAST MODE"
+    mode_text = "👨‍💼 STRICT" if strict else "🚀 FAST"
+
+    # 주제 소스 결정
+    if topic:
+        source = f"직접입력: {topic[:20]}..."
+        content_type = ContentType.CUSTOM
+    elif search:
+        source = f"YouTube 검색: {search}"
+        content_type = ContentType.YOUTUBE_SEARCH
+    else:
+        source = f"자동생성 ({category or '랜덤 카테고리'})"
+        content_type = ContentType.AUTO
 
     console.print(
         Panel.fit(
             "[bold blue]🎬 Shorts Automation[/bold blue]\n"
-            f"Content Type: {content_type}\n"
-            f"Count: {count}\n"
-            f"Mode: {mode_text}",
+            f"📌 {source}\n"
+            f"🔢 {count}개 생성\n"
+            f"⚡ {mode_text} 모드",
             title="Starting",
         ))
-
-    # Parse content type
-    try:
-        ct = ContentType(content_type)
-    except ValueError:
-        console.print(f"[red]Invalid content type: {content_type}[/red]")
-        console.print(f"Available: {[e.value for e in ContentType]}")
-        raise typer.Exit(1)
 
     # Run workflow
     workflow = ShortsWorkflow(strict_mode=strict)
@@ -69,8 +83,14 @@ def generate(
     async def run_batch():
         results = []
         for i in range(count):
-            console.print(f"\n[cyan]Generating short {i+1}/{count}...[/cyan]")
-            result = await workflow.run(content_type=ct)
+            console.print(
+                f"\n[cyan]━━━ Generating short {i+1}/{count} ━━━[/cyan]")
+            result = await workflow.run(
+                content_type=content_type,
+                category=category,
+                topic=topic,
+                search_query=search,
+            )
             results.append(result)
         return results
 
@@ -99,8 +119,8 @@ def config():
             f"[dim]API Keys configured:[/dim]\n"
             f"  AWS Bedrock: {'✅' if settings.aws.access_key_id else '⚡ (CLI)'}\n"
             f"  TypeCast: {'✅' if settings.tts.typecast_api_key else '❌'}\n"
-            f"  Reddit: {'✅' if settings.reddit.client_id else '❌'}\n"
-            f"  Stable Diffusion: {'✅' if settings.sd.api_url else '❌'}",
+            f"  YouTube: {'✅' if settings.youtube.api_key else '❌'}\n"
+            f"  Stable Diffusion: {settings.sd.api_url}",
             title="Settings",
         ))
 

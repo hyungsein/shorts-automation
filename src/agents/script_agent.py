@@ -5,7 +5,7 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 from ..config import settings
-from ..models import ContentType, Script, TrendData
+from ..models import ContentTone, ContentType, Script, TrendData
 from .base import BaseAgent
 
 SCRIPT_SYSTEM_PROMPT = """You are a viral YouTube Shorts scriptwriter. Your scripts are:
@@ -37,7 +37,19 @@ Generate a script with:
 1. HOOK (first 3 seconds - must grab attention immediately)
 2. BODY (main story - keep it engaging)
 3. CTA (call to action - "Follow for more" or similar)
-4. SCENES (4-6 image descriptions for illustration - describe anime/cartoon style visuals)
+4. TONE (choose the best tone for this content)
+5. SCENES (4-6 image descriptions for illustration - describe anime/cartoon style visuals)
+
+Available TONE options:
+- scary: 무서운 이야기 (차분한 남성 목소리)
+- horror: 공포/소름 (속삭이는 남성)
+- romance: 연애 썰 (밝은 여성)
+- funny: 웃긴 이야기 (발랄한 여성)
+- angry: 분노 유발 (화난 남성)
+- sad: 슬픈 이야기 (슬픈 여성)
+- news: 정보/팩트 (차분한 남성)
+- gossip: 가십/TMI (흥분한 여성)
+- default: 일반 (여성 스마트 감정)
 
 Output format:
 HOOK:
@@ -48,6 +60,9 @@ BODY:
 
 CTA:
 [Your call to action here]
+
+TONE:
+[Choose one: scary/horror/romance/funny/angry/sad/news/gossip/default]
 
 SCENES:
 - [Scene 1: describe the visual for this moment]
@@ -107,6 +122,7 @@ class ScriptAgent(BaseAgent[Script]):
         hook = ""
         body = ""
         cta = ""
+        tone_str = "default"
         scene_prompts = []
 
         current_section = None
@@ -130,6 +146,12 @@ class ScriptAgent(BaseAgent[Script]):
                 remaining = line[line.upper().find("CTA:") + 4:].strip()
                 if remaining:
                     cta = remaining
+            elif line_upper.startswith("TONE:"):
+                current_section = "tone"
+                remaining = line[line.upper().find("TONE:") +
+                                 5:].strip().lower()
+                if remaining:
+                    tone_str = remaining
             elif line_upper.startswith("SCENES:"):
                 current_section = "scenes"
             elif current_section and line.strip():
@@ -139,6 +161,8 @@ class ScriptAgent(BaseAgent[Script]):
                     body += " " + line.strip() if body else line.strip()
                 elif current_section == "cta":
                     cta += " " + line.strip() if cta else line.strip()
+                elif current_section == "tone":
+                    tone_str = line.strip().lower()
                 elif current_section == "scenes":
                     # Parse scene lines (- Scene X: description)
                     scene_line = line.strip()
@@ -151,14 +175,23 @@ class ScriptAgent(BaseAgent[Script]):
                         if scene_line:
                             scene_prompts.append(scene_line)
 
+        # Convert tone string to enum
+        try:
+            tone = ContentTone(tone_str)
+        except ValueError:
+            tone = ContentTone.DEFAULT
+            self.log(f"Unknown tone '{tone_str}', using default")
+
         script = Script(
             hook=hook.strip(),
             body=body.strip(),
             cta=cta.strip(),
+            tone=tone,
             scene_prompts=scene_prompts,
         )
         script.combine()
 
+        self.log(f"Detected tone: {tone.value}")
         return script
 
     async def generate_metadata(

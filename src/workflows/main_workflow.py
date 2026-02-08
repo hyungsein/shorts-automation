@@ -34,6 +34,9 @@ class WorkflowState(TypedDict):
     """State for the shorts workflow"""
     short_id: str
     content_type: ContentType
+    category: str | None
+    topic: str | None  # 직접 입력 주제
+    search_query: str | None
 
     # Generated data
     trend: TrendData | None
@@ -97,14 +100,27 @@ class ShortsWorkflow:
 
     async def run(
         self,
-        content_type: ContentType = ContentType.REDDIT_STORY
+        content_type: ContentType = ContentType.AUTO,
+        category: str = None,
+        topic: str = None,
+        search_query: str = None,
     ) -> VideoResult | None:
-        """Run the full workflow with supervisor review"""
+        """Run the full workflow
+        
+        Args:
+            content_type: 콘텐츠 타입 (기본: AUTO)
+            category: 카테고리 (인간관계, 연애 등)
+            topic: 직접 입력 주제
+            search_query: YouTube 검색어
+        """
         short_id = str(uuid.uuid4())[:8]
 
         initial_state: WorkflowState = {
             "short_id": short_id,
             "content_type": content_type,
+            "category": category,
+            "topic": topic,
+            "search_query": search_query,
             "trend": None,
             "trends_pool": [],
             "script": None,
@@ -118,9 +134,10 @@ class ShortsWorkflow:
             "error": None,
         }
 
-        print("\n" + "=" * 60)
-        print("🎬 SHORTS AUTOMATION with 👨‍💼 STRICT SUPERVISOR")
-        print("=" * 60)
+        mode = "👨‍💼 STRICT" if self.strict_mode else "🚀 FAST"
+        print(f"\n{'=' * 60}")
+        print(f"🎬 SHORTS AUTOMATION ({mode} MODE)")
+        print(f"{'=' * 60}")
 
         result = await self.graph.ainvoke(initial_state)
 
@@ -133,18 +150,45 @@ class ShortsWorkflow:
     async def _fetch_trend(self, state: WorkflowState) -> WorkflowState:
         """Fetch trending content with supervisor review"""
         print("\n" + "─" * 50)
-        print("🔥 Step 1: Fetching Trends...")
+        print("🔥 Step 1: Fetching Topics...")
         print("─" * 50)
 
         try:
             # 트렌드 풀이 비어있으면 새로 가져오기
             if not state["trends_pool"]:
-                trends = await self.trend_agent.run(
-                    content_type=state["content_type"],
-                    limit=10,  # 더 많이 가져와서 선택지 확보
-                )
+                content_type = state["content_type"]
+
+                # 1. CUSTOM: 직접 주제 입력
+                if content_type == ContentType.CUSTOM and state.get("topic"):
+                    from ..models import TrendData
+                    trends = [
+                        TrendData(
+                            title=state["topic"],
+                            source="user_input",
+                            score=100.0,
+                        )
+                    ]
+                    print(f"📝 Custom topic: {state['topic']}")
+
+                # 2. YOUTUBE_SEARCH: YouTube 키워드 검색
+                elif content_type == ContentType.YOUTUBE_SEARCH and state.get(
+                        "search_query"):
+                    trends = await self.trend_agent.search_youtube(
+                        query=state["search_query"],
+                        limit=10,
+                    )
+                    print(f"🔍 YouTube search: {state['search_query']}")
+
+                # 3. AUTO (기본): LLM 자동 생성
+                else:
+                    trends = await self.trend_agent.run(
+                        category=state.get("category"),
+                        count=5,
+                    )
+                    print(f"🤖 Auto-generated topics")
+
                 if not trends:
-                    return {**state, "error": "No trends found"}
+                    return {**state, "error": "No topics found"}
 
                 # 점수순 정렬
                 trends.sort(key=lambda t: t.score, reverse=True)
@@ -332,9 +376,16 @@ class ShortsWorkflow:
 
         try:
             output_path = settings.output_dir / state["short_id"] / "audio.mp3"
+
+            # 스크립트의 톤에 맞는 목소리 자동 매칭
+            script = state["script"]
+            tone = script.tone.value if hasattr(script, 'tone') else "default"
+            print(f"   Content tone: {tone}")
+
             audio = await self.voice_agent.run(
-                script=state["script"],
+                script=script,
                 output_path=output_path,
+                tone=tone,  # 톤에 맞는 목소리 자동 선택
             )
 
             print(f"   Duration: {audio.duration:.1f}s")
