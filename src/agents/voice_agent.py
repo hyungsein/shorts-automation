@@ -103,6 +103,7 @@ class VoiceAgent(BaseAgent[AudioResult]):
             prompt = {"emotion_type": "preset", "emotion_preset": emotion}
 
         # TTS 생성
+        # 쇼츠는 빠른 템포가 좋음 (1.1~1.2배속)
         async with httpx.AsyncClient(timeout=120) as client:
             response = await client.post(
                 f"{self.API_BASE}/v1/text-to-speech",
@@ -116,7 +117,7 @@ class VoiceAgent(BaseAgent[AudioResult]):
                     "output": {
                         "volume": 100,
                         "audio_pitch": 0,
-                        "audio_tempo": 1.0,
+                        "audio_tempo": 1.15,  # 쇼츠용 약간 빠른 속도
                         "audio_format": "mp3",
                     },
                 },
@@ -126,9 +127,9 @@ class VoiceAgent(BaseAgent[AudioResult]):
             with open(output_path, "wb") as f:
                 f.write(response.content)
 
-        # Estimate duration
+        # Estimate duration (faster tempo)
         char_count = len(script.full_text.replace(" ", ""))
-        duration = char_count / 3.0
+        duration = char_count / 3.5  # 빠른 템포 반영
 
         self.log(f"Audio saved: {output_path} (~{duration:.1f}s)")
 

@@ -42,6 +42,21 @@ class TrendData(BaseModel):
     fetched_at: datetime = Field(default_factory=datetime.now)
 
 
+class CameraEffect(str, Enum):
+    """카메라 효과"""
+    ZOOM_IN = "zoom_in"  # 줌인 (감정, 충격)
+    ZOOM_OUT = "zoom_out"  # 줌아웃 (물건→전체)
+    PAN_LEFT = "pan_left"  # 왼쪽 패닝
+    PAN_RIGHT = "pan_right"  # 오른쪽 패닝
+    STATIC = "static"  # 정적
+
+
+class SceneInfo(BaseModel):
+    """장면 정보 (프롬프트 + 카메라 효과)"""
+    prompt: str
+    effect: CameraEffect = CameraEffect.STATIC
+
+
 class Script(BaseModel):
     """Generated script for a short"""
     hook: str  # First 3 seconds
@@ -52,8 +67,11 @@ class Script(BaseModel):
     # 콘텐츠 톤 (목소리 자동 매칭용)
     tone: ContentTone = ContentTone.DEFAULT
 
-    # Scene descriptions for image generation
+    # Scene descriptions for image generation (레거시 호환)
     scene_prompts: list[str] = Field(default_factory=list)
+
+    # Scene with camera effects (새로운 방식)
+    scenes: list[SceneInfo] = Field(default_factory=list)
 
     def combine(self) -> str:
         """Combine all parts into full script"""

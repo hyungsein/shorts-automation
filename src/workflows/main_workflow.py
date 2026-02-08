@@ -183,7 +183,7 @@ class ShortsWorkflow:
                 else:
                     trends = await self.trend_agent.run(
                         category=state.get("category"),
-                        count=5,
+                        limit=5,
                     )
                     print(f"🤖 Auto-generated topics")
 
@@ -319,10 +319,27 @@ class ShortsWorkflow:
 
             try:
                 output_dir = settings.output_dir / state["short_id"] / "images"
+
+                # 1. 주제 관련 실제 이미지 검색 (첫 번째 이미지)
+                topic_image = await self.image_agent.get_topic_image(
+                    topic=state["current_trend"].title,
+                    output_dir=output_dir,
+                )
+
+                # 2. AI 생성 이미지들
                 images = await self.image_agent.run(
                     prompts=state["script"].scene_prompts,
                     output_dir=output_dir,
                 )
+
+                # 3. 주제 이미지를 맨 앞에 추가
+                if topic_image:
+                    topic_image.index = 0
+                    # 기존 이미지 인덱스 조정
+                    for img in images:
+                        img.index += 1
+                    images = [topic_image] + images
+                    print(f"   🔍 Topic image added: {topic_image.prompt}")
 
                 print(f"   Generated {len(images)} images")
 

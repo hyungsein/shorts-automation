@@ -55,8 +55,9 @@ class Settings(BaseModel):
     sd: StableDiffusionConfig = Field(default_factory=StableDiffusionConfig)
 
     # General settings
-    output_dir: Path = Field(
-        default_factory=lambda: Path(os.getenv("OUTPUT_DIR", "./output")))
+    output_dir: Path = Field(default_factory=lambda: Path(
+        os.getenv("OUTPUT_DIR",
+                  Path(__file__).parent.parent / "output")))
     default_language: str = Field(
         default_factory=lambda: os.getenv("DEFAULT_LANGUAGE", "ko"))
 

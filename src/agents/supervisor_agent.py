@@ -63,6 +63,14 @@ class SupervisorAgent(BaseAgent[SupervisorFeedback]):
     def name(self) -> str:
         return "👨‍💼 Supervisor"
 
+    async def run(self, *args, **kwargs) -> SupervisorFeedback:
+        """
+        SupervisorAgent는 직접 run()을 호출하지 않고
+        review_trend, review_script 등 개별 메서드를 사용합니다.
+        """
+        raise NotImplementedError(
+            "Use review_trend(), review_script(), etc. instead of run()")
+
     async def review_trend(self, trend: TrendData) -> SupervisorFeedback:
         """트렌드 평가 - 바이럴 가능성 체크"""
         self.log(f"Reviewing trend: {trend.title[:30]}...")
@@ -124,7 +132,7 @@ Evaluate HARSHLY:
 2. PACING: Is every second engaging? Any boring parts?
 3. EMOTION: Does it make viewers FEEL something?
 4. CTA: Is it natural, not cringy?
-5. SCENES: Are the visual descriptions vivid and appropriate?
+5. SCENES: Are there enough scenes (8-12)? Are visuals vivid and varied?
 6. LENGTH: Is it concise enough for Shorts? (100-150 words ideal)
 
 Word count: {word_count} words
@@ -132,6 +140,7 @@ Word count: {word_count} words
 Reject if:
 - Hook is weak or generic
 - Body is boring or too long
+- Scenes are too few (need 8-12 for fast pacing)
 - Scenes don't match the story
 - Overall not viral-worthy"""),
         ])

@@ -38,7 +38,20 @@ Generate a script with:
 2. BODY (main story - keep it engaging)
 3. CTA (call to action - "Follow for more" or similar)
 4. TONE (choose the best tone for this content)
-5. SCENES (4-6 image descriptions for illustration - describe anime/cartoon style visuals)
+5. SCENES (15-20 scenes with camera effects - 스토리에 맞는 카메라 워크!)
+
+CAMERA EFFECTS (각 장면 앞에 붙여서 사용):
+- [zoom_in] 중요한 순간, 표정 강조, 충격적인 장면
+- [zoom_out] 물건→사람, 디테일→전체 상황 보여줄 때
+- [pan_left] 두 사람 대화, A에서 B로 시선 이동
+- [pan_right] 반대 방향 시선 이동
+- [static] 평범한 장면, 빠른 전환
+
+SCENE 작성 규칙:
+- 핵심 물건/음식이 나오면: [zoom_out] 물건 클로즈업 → 상황 전체
+- 감정 표현: [zoom_in] 얼굴/표정으로 줌인
+- 대화/상호작용: [pan_left] 또는 [pan_right]
+- 일반 상황: [static]
 
 Available TONE options:
 - scary: 무서운 이야기 (차분한 남성 목소리)
@@ -65,10 +78,11 @@ TONE:
 [Choose one: scary/horror/romance/funny/angry/sad/news/gossip/default]
 
 SCENES:
-- [Scene 1: describe the visual for this moment]
-- [Scene 2: describe the visual for this moment]
-- [Scene 3: describe the visual for this moment]
-- [Scene 4: describe the visual for this moment]
+- [zoom_out] 치킨 클로즈업, 김이 모락모락
+- [static] 여자가 치킨 한 조각 집는 모습
+- [zoom_in] 맛있게 먹으며 행복한 표정
+- [pan_left] 옆에서 부러운 눈으로 쳐다보는 동료
+... (15-20 scenes total)
 """
 
 
@@ -164,16 +178,29 @@ class ScriptAgent(BaseAgent[Script]):
                 elif current_section == "tone":
                     tone_str = line.strip().lower()
                 elif current_section == "scenes":
-                    # Parse scene lines (- Scene X: description)
+                    # Parse scene lines with camera effect
+                    # Format: - [effect] description
                     scene_line = line.strip()
                     if scene_line.startswith("-"):
                         scene_line = scene_line[1:].strip()
                     if scene_line:
+                        # Extract camera effect [zoom_in], [zoom_out], etc.
+                        effect = "static"
+                        if scene_line.startswith("["):
+                            end_bracket = scene_line.find("]")
+                            if end_bracket > 0:
+                                effect = scene_line[1:end_bracket].lower()
+                                scene_line = scene_line[end_bracket +
+                                                        1:].strip()
+
                         # Remove "Scene X:" prefix if present
-                        if ":" in scene_line:
+                        if ":" in scene_line and scene_line.split(
+                                ":")[0].lower().startswith("scene"):
                             scene_line = scene_line.split(":", 1)[1].strip()
+
                         if scene_line:
-                            scene_prompts.append(scene_line)
+                            # Store as "effect|prompt" format
+                            scene_prompts.append(f"{effect}|{scene_line}")
 
         # Convert tone string to enum
         try:
