@@ -25,24 +25,36 @@ console = Console()
 def generate(
     content_type: str = typer.Option(
         "reddit_story",
-        "--type", "-t",
+        "--type",
+        "-t",
         help="Content type: reddit_story, scary_story, fun_facts, motivation",
     ),
     count: int = typer.Option(
         1,
-        "--count", "-c",
+        "--count",
+        "-c",
         help="Number of shorts to generate",
+    ),
+    strict: bool = typer.Option(
+        True,
+        "--strict/--no-strict",
+        "-s/-ns",
+        help="Enable strict supervisor mode (default: on)",
     ),
 ):
     """Generate YouTube Shorts automatically"""
-    
-    console.print(Panel.fit(
-        "[bold blue]🎬 Shorts Automation[/bold blue]\n"
-        f"Content Type: {content_type}\n"
-        f"Count: {count}",
-        title="Starting",
-    ))
-    
+
+    mode_text = "👨‍💼 STRICT MODE" if strict else "🚀 FAST MODE"
+
+    console.print(
+        Panel.fit(
+            "[bold blue]🎬 Shorts Automation[/bold blue]\n"
+            f"Content Type: {content_type}\n"
+            f"Count: {count}\n"
+            f"Mode: {mode_text}",
+            title="Starting",
+        ))
+
     # Parse content type
     try:
         ct = ContentType(content_type)
@@ -50,10 +62,10 @@ def generate(
         console.print(f"[red]Invalid content type: {content_type}[/red]")
         console.print(f"Available: {[e.value for e in ContentType]}")
         raise typer.Exit(1)
-    
+
     # Run workflow
-    workflow = ShortsWorkflow()
-    
+    workflow = ShortsWorkflow(strict_mode=strict)
+
     async def run_batch():
         results = []
         for i in range(count):
@@ -61,35 +73,37 @@ def generate(
             result = await workflow.run(content_type=ct)
             results.append(result)
         return results
-    
+
     results = asyncio.run(run_batch())
-    
+
     # Summary
+    successful = [r for r in results if r is not None]
     console.print("\n")
-    console.print(Panel.fit(
-        f"[green]✅ Generated {len(results)} shorts![/green]\n"
-        f"Output directory: {settings.output_dir}",
-        title="Complete",
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✅ Generated {len(successful)}/{len(results)} shorts![/green]\n"
+            f"Output directory: {settings.output_dir}",
+            title="Complete",
+        ))
 
 
 @app.command()
 def config():
     """Show current configuration"""
-    console.print(Panel.fit(
-        f"[bold]⚙️ Configuration[/bold]\n\n"
-        f"Output Dir: {settings.output_dir}\n"
-        f"Shorts/Day: {settings.shorts_per_day}\n"
-        f"Language: {settings.default_language}\n"
-        f"TTS Voice: {settings.tts.default_voice}\n\n"
-        f"[dim]API Keys configured:[/dim]\n"
-        f"  AWS Bedrock: {'✅' if settings.aws.access_key_id else '❌'}\n"
-        f"  ElevenLabs: {'✅' if settings.tts.elevenlabs_api_key else '❌'}\n"
-        f"  Reddit: {'✅' if settings.reddit.client_id else '❌'}\n"
-        f"  YouTube: {'✅' if settings.youtube.api_key else '❌'}\n"
-        f"  Pexels: {'✅' if settings.pexels.api_key else '❌'}",
-        title="Settings",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]⚙️ Configuration[/bold]\n\n"
+            f"Output Dir: {settings.output_dir}\n"
+            f"Shorts/Day: {settings.shorts_per_day}\n"
+            f"Language: {settings.default_language}\n"
+            f"TTS Voice: {settings.tts.default_voice}\n\n"
+            f"[dim]API Keys configured:[/dim]\n"
+            f"  AWS Bedrock: {'✅' if settings.aws.access_key_id else '❌'}\n"
+            f"  ElevenLabs: {'✅' if settings.tts.elevenlabs_api_key else '❌'}\n"
+            f"  Reddit: {'✅' if settings.reddit.client_id else '❌'}\n"
+            f"  Stable Diffusion: {'✅' if settings.stable_diffusion.api_url else '❌'}",
+            title="Settings",
+        ))
 
 
 @app.command()
@@ -97,11 +111,11 @@ def init():
     """Initialize project (create .env file)"""
     env_path = Path(".env")
     example_path = Path(".env.example")
-    
+
     if env_path.exists():
         console.print("[yellow].env file already exists![/yellow]")
         return
-    
+
     if example_path.exists():
         import shutil
         shutil.copy(example_path, env_path)

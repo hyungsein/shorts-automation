@@ -1,19 +1,18 @@
 """
-🔄 Main Shorts Automation Workflow using LangGraph
+🔄 Main Shorts Workflow (with Supervisor Review)
 """
 
 import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import Annotated, TypedDict
+from typing import TypedDict
 
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
 
 from ..agents import (
+    ImageAgent,
+    ReviewResult,
     ScriptAgent,
+    SupervisorAgent,
     TrendAgent,
-    UploadAgent,
     VideoAgent,
     VoiceAgent,
 )
@@ -21,273 +20,410 @@ from ..config import settings
 from ..models import (
     AudioResult,
     ContentType,
+    ImageResult,
     Script,
-    ShortStatus,
-    ShortVideo,
     TrendData,
     VideoResult,
 )
 
+# 최대 재시도 횟수
+MAX_RETRIES = 3
+
 
 class WorkflowState(TypedDict):
     """State for the shorts workflow"""
-    # Current short being processed
     short_id: str
-    status: ShortStatus
-    
-    # Content
     content_type: ContentType
+
+    # Generated data
     trend: TrendData | None
+    trends_pool: list[TrendData]  # 후보 트렌드들
     script: Script | None
-    
-    # Generated files
+    images: list[ImageResult]
     audio: AudioResult | None
     video: VideoResult | None
-    
-    # Metadata
-    title: str
-    description: str
-    tags: list[str]
-    
-    # Results
-    youtube_id: str | None
+
+    # Retry tracking
+    trend_attempts: int
+    script_attempts: int
+    image_attempts: int
+    audio_attempts: int
+
+    # Error handling
     error: str | None
 
 
 class ShortsWorkflow:
-    """Main workflow for generating YouTube Shorts"""
-    
-    def __init__(self):
+    """Main workflow for generating Shorts with Supervisor review"""
+
+    def __init__(self, strict_mode: bool = True):
+        """
+        Args:
+            strict_mode: True면 감독이 승인할 때까지 재시도
+        """
         self.trend_agent = TrendAgent()
         self.script_agent = ScriptAgent()
+        self.image_agent = ImageAgent()
         self.voice_agent = VoiceAgent()
         self.video_agent = VideoAgent()
-        self.upload_agent = UploadAgent()
-        
+        self.supervisor = SupervisorAgent()
+
+        self.strict_mode = strict_mode
         self.graph = self._build_graph()
-    
+
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph workflow"""
-        
-        # Create graph
         workflow = StateGraph(WorkflowState)
-        
+
         # Add nodes
         workflow.add_node("fetch_trend", self._fetch_trend)
         workflow.add_node("generate_script", self._generate_script)
+        workflow.add_node("generate_images", self._generate_images)
         workflow.add_node("generate_audio", self._generate_audio)
+        workflow.add_node("final_review", self._final_review)
         workflow.add_node("create_video", self._create_video)
-        workflow.add_node("upload", self._upload)
-        
+
         # Add edges
         workflow.add_edge("fetch_trend", "generate_script")
-        workflow.add_edge("generate_script", "generate_audio")
-        workflow.add_edge("generate_audio", "create_video")
-        workflow.add_edge("create_video", "upload")
-        workflow.add_edge("upload", END)
-        
-        # Set entry point
+        workflow.add_edge("generate_script", "generate_images")
+        workflow.add_edge("generate_images", "generate_audio")
+        workflow.add_edge("generate_audio", "final_review")
+        workflow.add_edge("final_review", "create_video")
+        workflow.add_edge("create_video", END)
+
         workflow.set_entry_point("fetch_trend")
-        
+
         return workflow.compile()
-    
-    async def _fetch_trend(self, state: WorkflowState) -> WorkflowState:
-        """Fetch trending content"""
-        print(f"\n{'='*50}")
-        print("🔥 Step 1: Fetching Trends")
-        print(f"{'='*50}")
-        
-        try:
-            trends = await self.trend_agent.run(
-                content_type=state["content_type"],
-                limit=5,
-            )
-            
-            if not trends:
-                return {**state, "error": "No trends found", "status": ShortStatus.FAILED}
-            
-            # Pick the top trending content
-            trend = max(trends, key=lambda t: t.score)
-            print(f"✅ Selected: {trend.title[:50]}... (score: {trend.score})")
-            
-            return {**state, "trend": trend, "status": ShortStatus.PENDING}
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return {**state, "error": str(e), "status": ShortStatus.FAILED}
-    
-    async def _generate_script(self, state: WorkflowState) -> WorkflowState:
-        """Generate script from trend"""
-        print(f"\n{'='*50}")
-        print("📝 Step 2: Generating Script")
-        print(f"{'='*50}")
-        
-        if state.get("error"):
-            return state
-        
-        try:
-            script = await self.script_agent.run(
-                trend=state["trend"],
-                language="Korean",
-                target_duration=45.0,
-            )
-            
-            # Generate metadata
-            metadata = await self.script_agent.generate_metadata(
-                script=script,
-                trend=state["trend"],
-            )
-            
-            print(f"✅ Script generated ({len(script.full_text)} chars)")
-            print(f"📌 Title: {metadata['title']}")
-            
-            return {
-                **state,
-                "script": script,
-                "title": metadata["title"],
-                "description": metadata["description"],
-                "tags": metadata["tags"],
-                "status": ShortStatus.SCRIPT_READY,
-            }
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return {**state, "error": str(e), "status": ShortStatus.FAILED}
-    
-    async def _generate_audio(self, state: WorkflowState) -> WorkflowState:
-        """Generate voiceover"""
-        print(f"\n{'='*50}")
-        print("🎙️ Step 3: Generating Audio")
-        print(f"{'='*50}")
-        
-        if state.get("error"):
-            return state
-        
-        try:
-            output_dir = settings.ensure_output_dir()
-            audio_path = output_dir / f"{state['short_id']}_audio.mp3"
-            
-            audio = await self.voice_agent.run(
-                script=state["script"],
-                output_path=audio_path,
-                voice=settings.tts.default_voice,
-            )
-            
-            print(f"✅ Audio generated: {audio.file_path}")
-            
-            return {**state, "audio": audio, "status": ShortStatus.AUDIO_READY}
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return {**state, "error": str(e), "status": ShortStatus.FAILED}
-    
-    async def _create_video(self, state: WorkflowState) -> WorkflowState:
-        """Create final video"""
-        print(f"\n{'='*50}")
-        print("🎬 Step 4: Creating Video")
-        print(f"{'='*50}")
-        
-        if state.get("error"):
-            return state
-        
-        try:
-            output_dir = settings.ensure_output_dir()
-            video_path = output_dir / f"{state['short_id']}_final.mp4"
-            
-            video = await self.video_agent.run(
-                audio=state["audio"],
-                script=state["script"],
-                output_path=video_path,
-            )
-            
-            print(f"✅ Video created: {video.file_path}")
-            
-            return {**state, "video": video, "status": ShortStatus.VIDEO_READY}
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return {**state, "error": str(e), "status": ShortStatus.FAILED}
-    
-    async def _upload(self, state: WorkflowState) -> WorkflowState:
-        """Upload to YouTube"""
-        print(f"\n{'='*50}")
-        print("📤 Step 5: Uploading to YouTube")
-        print(f"{'='*50}")
-        
-        if state.get("error"):
-            return state
-        
-        try:
-            # Note: Upload requires OAuth authentication
-            # For now, we'll skip actual upload and mark as ready
-            print("⚠️ Upload skipped (OAuth not configured)")
-            print(f"📁 Video ready at: {state['video'].file_path}")
-            
-            return {**state, "status": ShortStatus.VIDEO_READY}
-            
-            # Uncomment below when OAuth is configured:
-            # youtube_id = await self.upload_agent.run(
-            #     video=state["video"],
-            #     title=state["title"],
-            #     description=state["description"],
-            #     tags=state["tags"],
-            # )
-            # return {**state, "youtube_id": youtube_id, "status": ShortStatus.UPLOADED}
-            
-        except Exception as e:
-            print(f"❌ Error: {e}")
-            return {**state, "error": str(e), "status": ShortStatus.FAILED}
-    
+
     async def run(
         self,
-        content_type: ContentType = ContentType.REDDIT_STORY,
-    ) -> ShortVideo:
-        """Execute the full workflow"""
+        content_type: ContentType = ContentType.REDDIT_STORY
+    ) -> VideoResult | None:
+        """Run the full workflow with supervisor review"""
         short_id = str(uuid.uuid4())[:8]
-        
-        print(f"\n{'='*60}")
-        print(f"🎬 Starting Shorts Automation - ID: {short_id}")
-        print(f"📂 Content Type: {content_type.value}")
-        print(f"{'='*60}")
-        
-        # Initial state
+
         initial_state: WorkflowState = {
             "short_id": short_id,
-            "status": ShortStatus.PENDING,
             "content_type": content_type,
             "trend": None,
+            "trends_pool": [],
             "script": None,
+            "images": [],
             "audio": None,
             "video": None,
-            "title": "",
-            "description": "",
-            "tags": [],
-            "youtube_id": None,
+            "trend_attempts": 0,
+            "script_attempts": 0,
+            "image_attempts": 0,
+            "audio_attempts": 0,
             "error": None,
         }
-        
-        # Run workflow
-        final_state = await self.graph.ainvoke(initial_state)
-        
-        # Create ShortVideo result
-        short = ShortVideo(
-            id=short_id,
-            status=final_state["status"],
-            trend=final_state.get("trend"),
-            script=final_state.get("script"),
-            audio=final_state.get("audio"),
-            video=final_state.get("video"),
-            title=final_state.get("title", ""),
-            description=final_state.get("description", ""),
-            tags=final_state.get("tags", []),
-            youtube_id=final_state.get("youtube_id"),
+
+        print("\n" + "=" * 60)
+        print("🎬 SHORTS AUTOMATION with 👨‍💼 STRICT SUPERVISOR")
+        print("=" * 60)
+
+        result = await self.graph.ainvoke(initial_state)
+
+        if result.get("error"):
+            print(f"\n❌ Workflow failed: {result['error']}")
+            return None
+
+        return result.get("video")
+
+    async def _fetch_trend(self, state: WorkflowState) -> WorkflowState:
+        """Fetch trending content with supervisor review"""
+        print("\n" + "─" * 50)
+        print("🔥 Step 1: Fetching Trends...")
+        print("─" * 50)
+
+        try:
+            # 트렌드 풀이 비어있으면 새로 가져오기
+            if not state["trends_pool"]:
+                trends = await self.trend_agent.run(
+                    content_type=state["content_type"],
+                    limit=10,  # 더 많이 가져와서 선택지 확보
+                )
+                if not trends:
+                    return {**state, "error": "No trends found"}
+
+                # 점수순 정렬
+                trends.sort(key=lambda t: t.score, reverse=True)
+                state = {**state, "trends_pool": trends}
+
+            # 가장 높은 점수의 트렌드 선택
+            trends_pool = state["trends_pool"]
+            if not trends_pool:
+                return {
+                    **state, "error": "All trends rejected, no more candidates"
+                }
+
+            trend = trends_pool[0]
+            remaining = trends_pool[1:]
+
+            print(f"📌 Candidate: {trend.title[:50]}...")
+            print(f"   Score: {trend.score} | Source: {trend.source}")
+
+            # 감독 평가
+            if self.strict_mode:
+                feedback = await self.supervisor.review_trend(trend)
+
+                print(f"\n👨‍💼 Supervisor says: {feedback.feedback[:100]}...")
+
+                if feedback.result == ReviewResult.REJECTED:
+                    attempts = state["trend_attempts"] + 1
+                    print(f"❌ REJECTED (attempt {attempts}/{MAX_RETRIES})")
+                    print(
+                        f"   Suggestions: {', '.join(feedback.suggestions[:2])}"
+                    )
+
+                    if attempts >= MAX_RETRIES:
+                        return {
+                            **state, "error":
+                            f"Supervisor rejected {MAX_RETRIES} trends"
+                        }
+
+                    # 다음 트렌드로 재시도
+                    return {
+                        **state,
+                        "trends_pool": remaining,
+                        "trend_attempts": attempts,
+                    }
+
+            print(f"✅ APPROVED: {trend.title[:40]}...")
+            return {**state, "trend": trend, "trends_pool": remaining}
+
+        except Exception as e:
+            return {**state, "error": str(e)}
+
+    async def _generate_script(self, state: WorkflowState) -> WorkflowState:
+        """Generate script with supervisor review"""
+        print("\n" + "─" * 50)
+        print("📝 Step 2: Generating Script...")
+        print("─" * 50)
+
+        if state.get("error"):
+            return state
+
+        attempts = state["script_attempts"]
+
+        while attempts < MAX_RETRIES:
+            attempts += 1
+            print(f"\n🔄 Attempt {attempts}/{MAX_RETRIES}")
+
+            try:
+                script = await self.script_agent.run(trend=state["trend"])
+
+                print(
+                    f"   Generated: {len(script.full_text)} chars, {len(script.scene_prompts)} scenes"
+                )
+                print(f"   Hook: {script.hook[:50]}...")
+
+                # 감독 평가
+                if self.strict_mode:
+                    feedback = await self.supervisor.review_script(
+                        script, state["trend"])
+
+                    print(f"\n👨‍💼 Supervisor (Score: {feedback.score}/10)")
+                    print(f"   {feedback.feedback[:100]}...")
+
+                    if feedback.result == ReviewResult.APPROVED:
+                        print("✅ APPROVED!")
+                        return {
+                            **state, "script": script,
+                            "script_attempts": attempts
+                        }
+
+                    if feedback.result == ReviewResult.REJECTED:
+                        print(f"❌ REJECTED")
+                        for s in feedback.suggestions[:2]:
+                            print(f"   → {s}")
+                        continue
+
+                    # NEEDS_REVISION - 한번 더 시도
+                    print(f"🔄 NEEDS REVISION")
+                    for s in feedback.suggestions[:2]:
+                        print(f"   → {s}")
+                    continue
+                else:
+                    return {
+                        **state, "script": script,
+                        "script_attempts": attempts
+                    }
+
+            except Exception as e:
+                print(f"   Error: {e}")
+                continue
+
+        return {
+            **state, "error": f"Script rejected after {MAX_RETRIES} attempts"
+        }
+
+    async def _generate_images(self, state: WorkflowState) -> WorkflowState:
+        """Generate images with supervisor review"""
+        print("\n" + "─" * 50)
+        print("🎨 Step 3: Generating Images...")
+        print("─" * 50)
+
+        if state.get("error"):
+            return state
+
+        attempts = state["image_attempts"]
+
+        while attempts < MAX_RETRIES:
+            attempts += 1
+            print(f"\n🔄 Attempt {attempts}/{MAX_RETRIES}")
+
+            try:
+                output_dir = settings.output_dir / state["short_id"] / "images"
+                images = await self.image_agent.run(
+                    prompts=state["script"].scene_prompts,
+                    output_dir=output_dir,
+                )
+
+                print(f"   Generated {len(images)} images")
+
+                # 감독 평가 (프롬프트 기반)
+                if self.strict_mode:
+                    feedback = await self.supervisor.review_images(
+                        images, state["script"])
+
+                    print(f"\n👨‍💼 Supervisor (Score: {feedback.score}/10)")
+                    print(f"   {feedback.feedback[:100]}...")
+
+                    if feedback.result == ReviewResult.APPROVED:
+                        print("✅ APPROVED!")
+                        return {
+                            **state, "images": images,
+                            "image_attempts": attempts
+                        }
+
+                    # 이미지는 비용이 많이 드니 낮은 기준으로 통과
+                    if feedback.score >= 6:
+                        print("✅ ACCEPTABLE (score >= 6)")
+                        return {
+                            **state, "images": images,
+                            "image_attempts": attempts
+                        }
+
+                    print(f"❌ REJECTED")
+                    continue
+                else:
+                    return {
+                        **state, "images": images,
+                        "image_attempts": attempts
+                    }
+
+            except Exception as e:
+                print(f"   Error: {e}")
+                continue
+
+        return {
+            **state, "error": f"Images rejected after {MAX_RETRIES} attempts"
+        }
+
+    async def _generate_audio(self, state: WorkflowState) -> WorkflowState:
+        """Generate TTS audio with supervisor review"""
+        print("\n" + "─" * 50)
+        print("🎙️ Step 4: Generating Audio...")
+        print("─" * 50)
+
+        if state.get("error"):
+            return state
+
+        try:
+            output_path = settings.output_dir / state["short_id"] / "audio.mp3"
+            audio = await self.voice_agent.run(
+                script=state["script"],
+                output_path=output_path,
+            )
+
+            print(f"   Duration: {audio.duration:.1f}s")
+
+            # 감독 평가
+            if self.strict_mode:
+                feedback = await self.supervisor.review_audio(
+                    audio, state["script"])
+
+                print(f"\n👨‍💼 Supervisor (Score: {feedback.score}/10)")
+                print(f"   {feedback.feedback[:100]}...")
+
+                # 오디오는 재생성이 어려우니 경고만
+                if feedback.result == ReviewResult.REJECTED:
+                    print("⚠️ Warning: Audio not ideal, but proceeding...")
+
+            print(f"✅ Audio ready: {audio.duration:.1f}s")
+            return {**state, "audio": audio}
+
+        except Exception as e:
+            return {**state, "error": str(e)}
+
+    async def _final_review(self, state: WorkflowState) -> WorkflowState:
+        """Final supervisor review before video creation"""
+        print("\n" + "─" * 50)
+        print("👨‍💼 Step 5: FINAL SUPERVISOR REVIEW")
+        print("─" * 50)
+
+        if state.get("error"):
+            return state
+
+        if not self.strict_mode:
+            print("⏭️ Strict mode OFF - skipping final review")
+            return state
+
+        feedback = await self.supervisor.final_review(
+            trend=state["trend"],
+            script=state["script"],
+            image_count=len(state["images"]),
+            audio_duration=state["audio"].duration,
         )
-        
-        print(f"\n{'='*60}")
-        print(f"✅ Workflow Complete!")
-        print(f"📊 Status: {short.status.value}")
-        if short.video:
-            print(f"📁 Output: {short.video.file_path}")
-        print(f"{'='*60}\n")
-        
-        return short
+
+        print(f"\n{'='*50}")
+        print(f"👨‍💼 FINAL VERDICT: {feedback.score}/10")
+        print(f"{'='*50}")
+        print(f"\n{feedback.feedback}")
+
+        if feedback.suggestions:
+            print("\n📋 Notes:")
+            for s in feedback.suggestions:
+                print(f"   • {s}")
+
+        if feedback.result == ReviewResult.REJECTED:
+            print("\n❌ FINAL REVIEW FAILED")
+            print("   The supervisor has rejected this Short.")
+            return {
+                **state, "error":
+                "Final review failed - content not up to standards"
+            }
+
+        print("\n✅ APPROVED FOR VIDEO CREATION!")
+        return state
+
+    async def _create_video(self, state: WorkflowState) -> WorkflowState:
+        """Create final video"""
+        print("\n" + "─" * 50)
+        print("🎬 Step 6: Creating Video...")
+        print("─" * 50)
+
+        if state.get("error"):
+            return state
+
+        try:
+            output_path = settings.output_dir / state["short_id"] / "final.mp4"
+            video = await self.video_agent.run(
+                images=state["images"],
+                audio=state["audio"],
+                script=state["script"],
+                output_path=output_path,
+            )
+
+            print(f"\n{'='*60}")
+            print(f"🎉 VIDEO COMPLETE!")
+            print(f"{'='*60}")
+            print(f"📁 Output: {video.file_path}")
+            print(f"⏱️ Duration: {video.duration:.1f}s")
+            print(f"📐 Resolution: {video.resolution[0]}x{video.resolution[1]}")
+
+            return {**state, "video": video}
+
+        except Exception as e:
+            return {**state, "error": str(e)}

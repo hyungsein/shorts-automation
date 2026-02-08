@@ -4,14 +4,18 @@
 
 from .trend_agent import TrendAgent
 from .script_agent import ScriptAgent
+from .image_agent import ImageAgent
 from .voice_agent import VoiceAgent
 from .video_agent import VideoAgent
-from .upload_agent import UploadAgent
+from .supervisor_agent import SupervisorAgent, SupervisorFeedback, ReviewResult
 
 __all__ = [
     "TrendAgent",
-    "ScriptAgent", 
+    "ScriptAgent",
+    "ImageAgent",
     "VoiceAgent",
     "VideoAgent",
-    "UploadAgent",
+    "SupervisorAgent",
+    "SupervisorFeedback",
+    "ReviewResult",
 ]
