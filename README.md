@@ -1,29 +1,24 @@
 # 🎬 Shorts Automation
 
-AI-powered YouTube Shorts automation using **LangGraph** + **MCP**
+AI-powered YouTube Shorts automation with **LangGraph** + **Supervisor Agent**
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    LangGraph Workflow                    │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
-│  │ Trend    │───▶│ Script   │───▶│ Voice    │          │
-│  │ Agent    │    │ Agent    │    │ Agent    │          │
-│  └──────────┘    └──────────┘    └──────────┘          │
-│       │              │               │                  │
-│       ▼              ▼               ▼                  │
-│   Reddit API     Claude API     ElevenLabs             │
-│                                                         │
-│  ┌──────────┐    ┌──────────┐                          │
-│  │ Video    │───▶│ Upload   │                          │
-│  │ Agent    │    │ Agent    │                          │
-│  └──────────┘    └──────────┘                          │
-│       │              │                                  │
-│       ▼              ▼                                  │
-│   MoviePy        YouTube API                           │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    👨‍💼 SUPERVISOR                           │
+│            (각 단계마다 품질 검토 & OK 사인)                  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+    ┌─────────┬───────────┬───┴───────┬───────────┬─────────┐
+    ▼         ▼           ▼           ▼           ▼         ▼
+┌───────┐ ┌───────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌───────┐
+│ Trend │→│Script │→│  Image  │→│  Voice  │→│ FINAL   │→│ Video │
+│ Agent │ │ Agent │ │  Agent  │ │  Agent  │ │ REVIEW  │ │ Agent │
+└───────┘ └───────┘ └─────────┘ └─────────┘ └─────────┘ └───────┘
+    │         │           │           │
+    ▼         ▼           ▼           ▼
+ Reddit    Claude    Stable       ElevenLabs
+  API      Sonnet    Diffusion      TTS
+            4.5      (Local)
 ```
 
 ## 🚀 Quick Start
@@ -31,7 +26,7 @@ AI-powered YouTube Shorts automation using **LangGraph** + **MCP**
 ### 1. Install dependencies
 
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ### 2. Configure environment
@@ -41,10 +36,24 @@ cp .env.example .env
 # Edit .env with your API keys
 ```
 
-### 3. Run
+### 3. Run Stable Diffusion (Local)
 
 ```bash
-python -m src.main generate --type reddit_story --count 3
+# Automatic1111 or Forge 실행 필요
+# http://127.0.0.1:7860
+```
+
+### 4. Generate Shorts
+
+```bash
+# 감독 모드 ON (깐깐하게 품질 체크)
+python -m src.main generate --type reddit_story
+
+# 감독 모드 OFF (빠르게)
+python -m src.main generate --type reddit_story --no-strict
+
+# 여러 개 생성
+python -m src.main generate --type scary_story --count 3
 ```
 
 ## 📁 Project Structure
@@ -53,60 +62,68 @@ python -m src.main generate --type reddit_story --count 3
 shorts-automation/
 ├── src/
 │   ├── agents/
-│   │   ├── trend_agent.py    # 🔥 Trend discovery
-│   │   ├── script_agent.py   # 📝 Script generation
-│   │   ├── voice_agent.py    # 🎙️ TTS generation
-│   │   ├── video_agent.py    # 🎬 Video creation
-│   │   └── upload_agent.py   # 📤 YouTube upload
+│   │   ├── base.py            # 🤖 Base agent (Bedrock)
+│   │   ├── supervisor_agent.py # 👨‍💼 깐깐한 감독
+│   │   ├── trend_agent.py     # 🔥 Reddit 트렌드 수집
+│   │   ├── script_agent.py    # 📝 스크립트 생성
+│   │   ├── image_agent.py     # 🎨 Stable Diffusion 이미지
+│   │   ├── voice_agent.py     # 🎙️ ElevenLabs TTS
+│   │   └── video_agent.py     # 🎬 영상 합성
 │   ├── workflows/
-│   │   └── main_workflow.py  # 🔄 LangGraph workflow
-│   ├── config.py             # ⚙️ Configuration
-│   ├── models.py             # 📦 Data models
-│   └── main.py               # 🎯 CLI entry point
-├── output/                    # Generated videos
-├── .env.example              # Environment template
-└── pyproject.toml            # Dependencies
+│   │   └── main_workflow.py   # 🔄 LangGraph 워크플로우
+│   ├── config.py              # ⚙️ 설정
+│   ├── models.py              # 📦 데이터 모델
+│   └── main.py                # 🎯 CLI
+├── output/                    # 생성된 영상
+├── .env.example               # 환경변수 템플릿
+└── requirements.txt           # 의존성
 ```
 
 ## 🎯 Content Types
 
 | Type | Description | Source |
 |------|-------------|--------|
-| `reddit_story` | Viral Reddit stories | r/AmItheAsshole, r/tifu |
-| `scary_story` | Horror stories | r/nosleep, r/creepypasta |
-| `fun_facts` | Interesting facts | r/todayilearned |
-| `motivation` | Motivational content | r/GetMotivated |
+| `reddit_story` | 바이럴 레딧 스토리 | r/AmItheAsshole, r/tifu |
+| `scary_story` | 공포 이야기 | r/nosleep, r/creepypasta |
+| `fun_facts` | 흥미로운 사실 | r/todayilearned |
+| `motivation` | 동기부여 콘텐츠 | r/GetMotivated |
 
 ## 🔑 Required API Keys
 
 | Service | Purpose | Get it at |
 |---------|---------|-----------|
-| AWS Bedrock | Script generation (Claude) | [AWS Console](https://console.aws.amazon.com/bedrock) |
-| ElevenLabs | Text-to-Speech | [elevenlabs.io](https://elevenlabs.io) |
-| Reddit | Content scraping | [reddit.com/prefs/apps](https://reddit.com/prefs/apps) |
-| YouTube | Video upload | [console.cloud.google.com](https://console.cloud.google.com) |
-| Pexels | Stock videos | [pexels.com/api](https://pexels.com/api) |
+| AWS Bedrock | Claude Sonnet 4.5 | [AWS Console](https://console.aws.amazon.com/bedrock) |
+| ElevenLabs | TTS (한국어 지원) | [elevenlabs.io](https://elevenlabs.io) |
+| Reddit | 콘텐츠 수집 | [reddit.com/prefs/apps](https://reddit.com/prefs/apps) |
 
-## 📊 Revenue Projection
+## 👨‍💼 Supervisor Mode
 
-| Month | Videos | Subscribers | Est. Revenue |
-|-------|--------|-------------|--------------|
-| 1 | 90 | 2K | ₩0 |
-| 3 | 270 | 20K | ₩30-50만 |
-| 6 | 540 | 100K | ₩100-200만 |
-| 12 | 1000+ | 300K+ | ₩300-500만 |
+감독 Agent가 각 단계 결과물을 평가:
+
+| 점수 | 결과 | 설명 |
+|------|------|------|
+| 9-10 | ✅ APPROVED | 바이럴 각! |
+| 7-8 | 🔄 | 수정하면 좋겠지만 통과 |
+| 5-6 | 🔄 NEEDS_REVISION | 재시도 |
+| 1-4 | ❌ REJECTED | 다시해 |
+
+```bash
+# 감독 ON (기본값) - 품질 보장
+python -m src.main generate -t reddit_story
+
+# 감독 OFF - 빠르게 테스트
+python -m src.main generate -t reddit_story --no-strict
+```
+
+## 💰 예상 비용 (하루 3개 × 30일)
+
+| Service | Monthly Cost |
+|---------|-------------|
+| AWS Bedrock (Claude) | ~$10 |
+| ElevenLabs (Creator) | $22 |
+| Stable Diffusion | $0 (로컬) |
+| **Total** | **~$32/월** |
 
 ## ⚠️ Disclaimer
 
-- Follow YouTube's Community Guidelines
-- Use royalty-free background videos and music
-- Review generated content before uploading
-- Respect copyright and platform policies
-
-## 📝 License
-
-MIT License - Use at your own risk!
-
----
-
-Made with ❤️ and AI
+This tool is for educational purposes. Always follow platform guidelines and respect copyright.
