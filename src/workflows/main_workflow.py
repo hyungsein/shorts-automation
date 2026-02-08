@@ -113,7 +113,9 @@ class ShortsWorkflow:
             topic: 직접 입력 주제
             search_query: YouTube 검색어
         """
-        short_id = str(uuid.uuid4())[:8]
+        # 날짜시간 형식으로 폴더명 생성 (예: 20260209_143052)
+        from datetime import datetime
+        short_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         initial_state: WorkflowState = {
             "short_id": short_id,
@@ -322,7 +324,7 @@ class ShortsWorkflow:
 
                 # 1. 주제 관련 실제 이미지 검색 (첫 번째 이미지)
                 topic_image = await self.image_agent.get_topic_image(
-                    topic=state["current_trend"].title,
+                    topic=state["trend"].title,
                     output_dir=output_dir,
                 )
 
@@ -394,15 +396,14 @@ class ShortsWorkflow:
         try:
             output_path = settings.output_dir / state["short_id"] / "audio.mp3"
 
-            # 스크립트의 톤에 맞는 목소리 자동 매칭
+            # 목소리 고정: 소예
             script = state["script"]
-            tone = script.tone.value if hasattr(script, 'tone') else "default"
-            print(f"   Content tone: {tone}")
+            print(f"   Voice: 소예 (Soye)")
 
             audio = await self.voice_agent.run(
                 script=script,
                 output_path=output_path,
-                tone=tone,  # 톤에 맞는 목소리 자동 선택
+                voice_id="tc_6837dec48fc46637a9272b88",  # 소예 voice_id
             )
 
             print(f"   Duration: {audio.duration:.1f}s")
@@ -477,11 +478,22 @@ class ShortsWorkflow:
 
         try:
             output_path = settings.output_dir / state["short_id"] / "final.mp4"
+
+            # 제목 생성 (트렌드 제목 또는 hook 앞부분)
+            title = None
+            if state.get("trend") and state["trend"].title:
+                title = state["trend"].title
+            elif state.get("script") and state["script"].hook:
+                # hook의 첫 문장만 사용
+                hook = state["script"].hook
+                title = hook.split('.')[0].split('?')[0].split('!')[0][:30]
+
             video = await self.video_agent.run(
                 images=state["images"],
                 audio=state["audio"],
                 script=state["script"],
                 output_path=output_path,
+                title=title,  # 상단 제목 추가
             )
 
             print(f"\n{'='*60}")

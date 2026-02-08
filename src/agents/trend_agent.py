@@ -114,7 +114,7 @@ class TrendAgent(BaseAgent[list[TrendData]]):
 - "월급 200 받으면서 깨달은 것들"
 
 각 주제마다 간단한 내용 요약도 함께 작성하세요."""),
-            ("user", f"""카테고리: {category}
+            ("user", """카테고리: {category}
 {youtube_context}
 
 위 카테고리에서 바이럴될 쇼츠 주제 {limit}개를 생성하세요.
@@ -129,12 +129,26 @@ class TrendAgent(BaseAgent[list[TrendData]]):
 ..."""),
         ])
 
-        chain = prompt | self.llm
-        response = await chain.ainvoke({})
+        try:
+            chain = prompt | self.llm
+            self.log("Calling LLM...")
+            response = await chain.ainvoke({
+                "category": category,
+                "youtube_context": youtube_context,
+                "limit": limit,
+            })
+            self.log(f"LLM Response received: {len(response.content)} chars")
+            self.log(f"Response preview: {response.content[:200]}...")
 
-        # 파싱
-        topics = self._parse_topics(response.content, category)
-        return topics[:limit]
+            # 파싱
+            topics = self._parse_topics(response.content, category)
+            self.log(f"Parsed {len(topics)} topics")
+            return topics[:limit]
+        except Exception as e:
+            import traceback
+            self.log(f"LLM Error: {type(e).__name__}: {e}")
+            self.log(traceback.format_exc())
+            return []
 
     def _parse_topics(self, response: str, category: str) -> list[TrendData]:
         """LLM 응답 파싱"""
@@ -149,8 +163,12 @@ class TrendAgent(BaseAgent[list[TrendData]]):
             if not line:
                 continue
 
-            # 번호로 시작하는 제목 라인
-            if line[0].isdigit() and "." in line[:3]:
+            # ## 1. 또는 1. 로 시작하는 제목 라인
+            # "## 1." 또는 "1." 패턴 감지
+            clean_line = line.lstrip("#").strip()
+
+            if clean_line and clean_line[0].isdigit(
+            ) and "." in clean_line[:4]:
                 # 이전 주제 저장
                 if current_title:
                     topics.append(
@@ -162,14 +180,18 @@ class TrendAgent(BaseAgent[list[TrendData]]):
                             content_type=ContentType.AUTO,
                         ))
 
-                # 새 주제 시작
-                current_title = line.split(".", 1)[1].strip()
-                # 대괄호 제거
-                current_title = current_title.strip("[]")
+                # 새 주제 시작 - "1. " 이후 부분 추출
+                current_title = clean_line.split(".", 1)[1].strip()
+                # 따옴표, 대괄호 제거
+                current_title = current_title.strip("[]\"'")
                 current_content = ""
 
-            # 내용 라인
-            elif line.startswith("내용:") or line.startswith("요약:"):
+            # 내용 라인 - **내용:** 또는 내용: 패턴
+            elif "내용:" in line or "요약:" in line:
+                # **내용:** 형식 처리
+                content_part = line.split(":",
+                                          1)[1].strip() if ":" in line else ""
+                current_content = content_part.strip("*")
                 current_content = line.split(":", 1)[1].strip()
 
         # 마지막 주제 저장

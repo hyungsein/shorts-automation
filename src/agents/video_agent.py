@@ -8,12 +8,15 @@ from pathlib import Path
 from moviepy import (
     AudioFileClip,
     ColorClip,
+    CompositeAudioClip,
     CompositeVideoClip,
     ImageClip,
     TextClip,
     concatenate_videoclips,
 )
+from moviepy.audio.fx import MultiplyVolume
 from PIL import Image
+import random
 
 from ..config import settings
 from ..models import AudioResult, ImageResult, Script, VideoResult
@@ -31,12 +34,23 @@ class VideoAgent(BaseAgent[VideoResult]):
     WIDTH = 1080
     HEIGHT = 1920
 
+    # BGM 폴더 경로
+    BGM_DIR = Path(__file__).parent.parent.parent / "assets" / "bgm"
+
+    def _get_bgm(self) -> Path | None:
+        """고정 BGM 반환 (soft_ambient.mp3)"""
+        bgm_path = self.BGM_DIR / "soft_ambient.mp3"
+        if bgm_path.exists():
+            return bgm_path
+        return None
+
     async def run(
-        self,
-        images: list[ImageResult],
-        audio: AudioResult,
-        script: Script,
-        output_path: Path,
+            self,
+            images: list[ImageResult],
+            audio: AudioResult,
+            script: Script,
+            output_path: Path,
+            title: str = None,  # 상단 제목 (선택)
     ) -> VideoResult:
         """Create final short video with images and subtitles"""
         self.log("Creating video...")
@@ -44,9 +58,34 @@ class VideoAgent(BaseAgent[VideoResult]):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Load audio
-        audio_clip = AudioFileClip(str(audio.file_path))
-        duration = audio_clip.duration
+        # Load TTS audio
+        tts_clip = AudioFileClip(str(audio.file_path))
+        duration = tts_clip.duration
+
+        # Load BGM (있으면 TTS와 믹스)
+        bgm_path = self._get_bgm()
+        if bgm_path:
+            self.log(f"🎵 BGM: {bgm_path.name}")
+            bgm_clip = AudioFileClip(str(bgm_path))
+            # BGM을 영상 길이에 맞게 자르기
+            if bgm_clip.duration > duration:
+                bgm_clip = bgm_clip.subclipped(0, duration)
+            else:
+                # BGM이 짧으면 루프
+                from moviepy import concatenate_audioclips
+                loops_needed = int(duration / bgm_clip.duration) + 1
+                bgm_clips = [
+                    AudioFileClip(str(bgm_path)) for _ in range(loops_needed)
+                ]
+                bgm_clip = concatenate_audioclips(bgm_clips).subclipped(
+                    0, duration)
+            # BGM 볼륨 낮추기 (TTS가 메인) - 15%
+            bgm_clip = bgm_clip.with_effects([MultiplyVolume(0.15)])
+            # TTS + BGM 믹스
+            audio_clip = CompositeAudioClip([tts_clip, bgm_clip])
+        else:
+            self.log("⚠️ No BGM found in assets/bgm/ folder")
+            audio_clip = tts_clip
 
         # Create image slideshow
         if images:
@@ -57,10 +96,18 @@ class VideoAgent(BaseAgent[VideoResult]):
         # Generate subtitles
         subtitle_clips = await self._generate_subtitles(script, duration)
 
+        # Generate title (상단에 표시)
+        title_clips = []
+        if title:
+            title_clips = self._create_title_clip(title, duration)
+
         # Compose final video
-        final_clip = CompositeVideoClip([bg_clip] + subtitle_clips,
+        final_clip = CompositeVideoClip([bg_clip] + title_clips +
+                                        subtitle_clips,
                                         size=(self.WIDTH, self.HEIGHT))
         final_clip = final_clip.with_audio(audio_clip)
+
+        self.log(f"Audio duration: {audio_clip.duration:.1f}s")
 
         # Export
         self.log(f"Exporting video to {output_path}...")
@@ -71,6 +118,7 @@ class VideoAgent(BaseAgent[VideoResult]):
             audio_codec="aac",
             preset="medium",
             threads=4,
+            audio=True,  # 오디오 포함 명시
         )
 
         # Cleanup
@@ -111,11 +159,8 @@ class VideoAgent(BaseAgent[VideoResult]):
                 parts = img_result.prompt.split("|", 1)
                 effect_type = parts[0].strip()
 
-            # 유효한 효과인지 확인
-            valid_effects = [
-                "zoom_in", "zoom_out", "pan_left", "pan_right", "static",
-                "zoom_pulse"
-            ]
+            # 유효한 효과인지 확인 (shake 제외 - 어지러움)
+            valid_effects = ["zoom_in", "zoom_out", "static", "fade"]
             if effect_type not in valid_effects:
                 effect_type = "static"
 
@@ -146,14 +191,16 @@ class VideoAgent(BaseAgent[VideoResult]):
         duration: float,
     ) -> ImageClip:
         """
-        다이나믹 줌/팬 효과 적용
-        - zoom_in: 천천히 줌인
-        - zoom_out: 줌아웃
-        - pan_left/right: 좌우 패닝
-        - zoom_pulse: 줌인했다 줌아웃
+        다이나믹 효과 적용
+        - zoom_in: 천천히 줌인 (강조)
+        - zoom_out: 줌아웃 (전체 상황)
+        - shake: 화면 흔들림 (충격, 놀람)
+        - fade: 페이드 효과 (장면 전환)
+        - static: 효과 없음
         """
+        import math
 
-        # 줌 범위 (1.0 = 원본, 1.2 = 20% 확대)
+        # 줌 범위 (1.0 = 원본, 1.15 = 15% 확대)
         zoom_start = 1.0
         zoom_end = 1.15
 
@@ -169,57 +216,85 @@ class VideoAgent(BaseAgent[VideoResult]):
             scale = zoom_end - (zoom_end - zoom_start) * progress
             return scale
 
-        def zoom_pulse_effect(t):
-            """줌인했다가 줌아웃"""
-            import math
-            progress = t / duration if duration > 0 else 0
-            # 사인 곡선으로 부드럽게
-            scale = zoom_start + (zoom_end - zoom_start) * math.sin(
-                progress * math.pi)
-            return scale
+        def shake_position(t):
+            """화면 흔들림 효과"""
+            intensity = 8  # 흔들림 강도 (픽셀)
+            frequency = 15  # 흔들림 빈도
+            x = int(math.sin(t * frequency) * intensity)
+            y = int(math.cos(t * frequency * 1.3) * intensity * 0.5)
+            return (x, y)
 
         if effect_type == "zoom_in":
             return clip.resized(lambda t: zoom_in_effect(t))
         elif effect_type == "zoom_out":
             return clip.resized(lambda t: zoom_out_effect(t))
-        elif effect_type == "zoom_pulse":
-            return clip.resized(lambda t: zoom_pulse_effect(t))
-        elif effect_type == "pan_left":
-            # 오른쪽에서 왼쪽으로 이동
-            def pan_left_pos(t):
-                progress = t / duration if duration > 0 else 0
-                x = int(50 - 100 * progress)  # 50 -> -50
-                return (x, 'center')
-
-            return clip.with_position(pan_left_pos)
-        elif effect_type == "pan_right":
-            # 왼쪽에서 오른쪽으로 이동
-            def pan_right_pos(t):
-                progress = t / duration if duration > 0 else 0
-                x = int(-50 + 100 * progress)  # -50 -> 50
-                return (x, 'center')
-
-            return clip.with_position(pan_right_pos)
+        elif effect_type == "shake":
+            # 흔들림 + 살짝 줌인
+            clip = clip.resized(1.05)
+            return clip.with_position(shake_position)
+        elif effect_type == "fade":
+            # 페이드인 효과
+            return clip.with_effects([lambda c: c.crossfadein(0.3)])
         else:
             return clip
 
     def _resize_to_fit(self, clip: ImageClip) -> ImageClip:
-        """Resize image clip to fit 9:16 with extra margin for zoom effects"""
-        # Calculate scale to fill the frame (줌 효과를 위해 20% 더 크게)
+        """Resize image clip to fit 9:16 - 화면 꽉 채우고 위아래 크롭"""
+        # 화면을 꽉 채우고 2배 확대
         scale_w = self.WIDTH / clip.w
         scale_h = self.HEIGHT / clip.h
-        scale = max(scale_w, scale_h) * 1.2  # 20% 여유
+        scale = max(scale_w, scale_h) * 2.0  # 2배 확대
 
         new_w = int(clip.w * scale)
         new_h = int(clip.h * scale)
 
         clip = clip.resized((new_w, new_h))
 
-        # Center the clip
+        # 중앙 배치 (화면 꽉 채움)
         x_pos = (self.WIDTH - new_w) // 2
         y_pos = (self.HEIGHT - new_h) // 2
 
         return clip.with_position((x_pos, y_pos))
+
+    def _create_title_clip(self, title: str, duration: float) -> list:
+        """상단에 제목 오버레이 (반투명 배경 + 흰색 글씨)"""
+
+        # 제목이 너무 길면 자르기
+        if len(title) > 25:
+            title = title[:22] + "..."
+
+        title_clips = []
+
+        # 제목 텍스트
+        main_title = TextClip(
+            text=title,
+            font_size=48,
+            color="white",
+            font="/System/Library/Fonts/AppleSDGothicNeo.ttc",
+            method="caption",
+            size=(self.WIDTH - 100, None),
+            text_align="center",
+            stroke_color="black",
+            stroke_width=3,
+        )
+
+        # 제목 배경 박스 (반투명 검정)
+        title_w, title_h = main_title.size
+        title_bg = ColorClip(
+            size=(title_w + 40, title_h + 20),
+            color=(0, 0, 0),
+        ).with_opacity(0.6)
+
+        # 상단 배치 (y=80)
+        title_bg = title_bg.with_position(("center", 70))
+        title_bg = title_bg.with_duration(duration)
+        main_title = main_title.with_position(("center", 80))
+        main_title = main_title.with_duration(duration)
+
+        title_clips.append(title_bg)
+        title_clips.append(main_title)
+
+        return title_clips
 
     async def _generate_subtitles(
         self,
@@ -239,6 +314,12 @@ class VideoAgent(BaseAgent[VideoResult]):
 
         # 스크립트를 문장 단위로 먼저 분리
         text = script.full_text
+
+        # 따옴표 제거 (", ", ‘, ’, “, ” 등)
+        text = text.replace('"', '').replace("'", '')
+        text = text.replace('“', '').replace('”',
+                                             '').replace('‘',
+                                                         '').replace('’', '')
 
         # 마침표, 물음표, 느낌표로 문장 분리
         import re
@@ -295,25 +376,39 @@ class VideoAgent(BaseAgent[VideoResult]):
         self.log(f"Creating {len(phrases)} subtitle segments")
 
         for pt in phrase_times:
-            # 자막 클립 생성
+            # 자막 텍스트 클립 생성 (두꺼운 글씨 + 테두리)
             txt_clip = TextClip(
                 text=pt["text"],
                 font_size=72,  # 더 큰 글씨
                 color="white",
-                stroke_color="black",
-                stroke_width=4,  # 더 두꺼운 테두리
-                font="Arial-Bold",
+                font="/System/Library/Fonts/AppleSDGothicNeo.ttc",
                 method="caption",
-                size=(self.WIDTH - 120, None),
+                size=(self.WIDTH - 160, None),
                 text_align="center",
+                stroke_color="black",  # 검정 테두리
+                stroke_width=3,  # 테두리 두께
             )
 
-            # 하단 safe zone에 배치 (UI 피해서)
-            # 화면의 약 70% 위치 (하단 30% 영역 중 위쪽)
-            txt_clip = txt_clip.with_position(("center", self.HEIGHT * 0.68))
-            txt_clip = txt_clip.with_start(pt["start"])
-            txt_clip = txt_clip.with_duration(pt["duration"])
+            # 검정색 배경 박스 생성 (더 크게)
+            txt_w, txt_h = txt_clip.size
+            padding_x = 40  # 좌우 패딩
+            padding_y = 30  # 상하 패딩
+            bg_clip = ColorClip(
+                size=(txt_w + padding_x * 2, txt_h + padding_y * 2),
+                color=(0, 0, 0),  # 검정색
+            )
 
+            # 배경 + 텍스트 합치기
+            bg_clip = bg_clip.with_position(("center", self.HEIGHT * 0.72))
+            txt_clip = txt_clip.with_position(
+                ("center", self.HEIGHT * 0.72 + padding_y))
+
+            bg_clip = bg_clip.with_start(pt["start"]).with_duration(
+                pt["duration"])
+            txt_clip = txt_clip.with_start(pt["start"]).with_duration(
+                pt["duration"])
+
+            subtitle_clips.append(bg_clip)
             subtitle_clips.append(txt_clip)
 
         return subtitle_clips

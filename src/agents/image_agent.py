@@ -19,7 +19,7 @@ from .base import BaseAgent
 class ImageAgent(BaseAgent[list[ImageResult]]):
     """Agent for generating images with Stable Diffusion (diffusers)"""
 
-    # Model path - MeinaMix V11 (귀여운 로맨스 스타일)
+    # Model path - MeinaMix V11 (글래머 오피스 스타일)
     MODEL_PATH = Path.home(
     ) / "ComfyUI" / "models" / "checkpoints" / "meinamix_v11.safetensors"
 
@@ -30,14 +30,66 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
     def name(self) -> str:
         return "🎨 ImageAgent"
 
-    # 쇼츠용 캐릭터 스타일 - 글래머 오피스 여캐
-    CHARACTER_BASE_PROMPT = """
-    masterpiece, best quality, beautiful detailed eyes,
-    1girl, office lady, business suit, pencil skirt,
-    large breasts, slim waist, attractive body,
-    pretty face, makeup, long hair,
-    soft lighting, clean background
-    """.strip()
+    # 의상 + 배경 매칭 (캐주얼 위주)
+    OUTFIT_BACKGROUND_PAIRS = [
+        # 👖 청반바지/데님 (잘 뽑히는 스타일!)
+        ("crop top, denim shorts",
+         ["park, sunny day", "city street, summer", "ice cream shop"]),
+        ("white t-shirt, denim shorts",
+         ["cafe interior", "convenience store", "street, shopping"]),
+        ("tank top, denim shorts",
+         ["beach, summer", "pool party", "outdoor cafe"]),
+        ("off-shoulder top, denim shorts",
+         ["city street", "rooftop, sunny", "park, picnic"]),
+        ("striped shirt, denim shorts",
+         ["cafe terrace", "bookstore", "street, walking"]),
+
+        # 👕 캐주얼 일상
+        ("oversized t-shirt, shorts",
+         ["room interior, bedroom", "living room, sofa", "convenience store"]),
+        ("hoodie, mini skirt, sneakers",
+         ["arcade, game center", "subway station", "street, night"]),
+        ("casual dress, sneakers",
+         ["park, sunny", "shopping mall", "cafe interior"]),
+        ("cardigan, shorts, casual",
+         ["cafe interior", "library", "street, autumn"]),
+
+        # 🌞 여름 캐주얼
+        ("sleeveless top, hot pants",
+         ["beach, sunset", "pool, summer", "rooftop, sunny"]),
+        ("sundress, summer dress",
+         ["flower field", "beach boardwalk", "outdoor cafe"]),
+        ("bikini top, denim shorts",
+         ["beach, ocean", "pool party", "resort, summer"]),
+    ]
+
+    # 주인공 외모 옵션 (영상 시작 시 랜덤 선택 후 고정)
+    # 모든 캐릭터 검은 머리로 통일
+    HAIR_OPTIONS = [
+        "long straight black hair",  # 긴 생머리
+        "short black hair, bob cut",  # 단발
+    ]
+
+    FACE_OPTIONS = [
+        "pretty face, makeup, black eyes",
+        "beautiful face, light makeup, black eyes",
+        "cute face, natural makeup, black eyes",
+    ]
+
+    # 글래머 캐릭터 (주인공 = {protagonist}) - 짧게!
+    CHARACTER_TEMPLATES = [
+        # 주인공 혼자
+        ("1girl, {protagonist}, {outfit}", 60),
+        # 주인공 + 다른 여자
+        ("2girls, {protagonist}, another girl, {outfit}", 15),
+        # 주인공 + 남자
+        ("1boy 1girl, {protagonist}, handsome man", 15),
+        # 클로즈업
+        ("1girl, {protagonist}, upper body, face focus", 10),
+    ]
+
+    # 프롬프트 (간결하게 - CLIP 77토큰 제한)
+    QUALITY_PROMPT = "masterpiece, best quality, korean webtoon"
 
     NEGATIVE_PROMPT = """
     ugly, deformed, noisy, blurry, low quality,
@@ -50,13 +102,16 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
     def __init__(self):
         super().__init__()
         self._pipe: Optional[StableDiffusionPipeline] = None
+        self._protagonist: Optional[str] = None  # 주인공 캐릭터 (영상마다 고정)
+        self._protagonist_seed: Optional[int] = None  # 주인공 seed (일관성)
 
     def _load_pipeline(self) -> StableDiffusionPipeline:
         """Load the Stable Diffusion pipeline (lazy loading)"""
         if self._pipe is not None:
             return self._pipe
 
-        self.log("Loading MeinaMix model (first time may take a while)...")
+        self.log(
+            "Loading Counterfeit V3 model (first time may take a while)...")
 
         # Check for Apple Silicon MPS
         if torch.backends.mps.is_available():
@@ -103,21 +158,79 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
         self.log("Model loaded successfully! ✨")
         return self._pipe
 
+    def _create_protagonist(self) -> str:
+        """영상 시작 시 주인공 외모 생성 (한 번만) - 짧게!"""
+        hair = random.choice(self.HAIR_OPTIONS)
+        # 간결하게: 머리 + 몸매만
+        protagonist = f"{hair}, pretty face, large breasts"
+        self.log(f"🎭 주인공: {hair}")
+        return protagonist
+
+    def _pick_outfit_and_background(self) -> tuple[str, str]:
+        """의상과 어울리는 배경을 함께 선택"""
+        outfit, backgrounds = random.choice(self.OUTFIT_BACKGROUND_PAIRS)
+        background = random.choice(backgrounds)
+        return outfit, background
+
+    def _pick_character_template(self, scene_prompt: str = "") -> str:
+        """씬 내용에 맞는 캐릭터 템플릿 선택 - 씬 프롬프트가 주인공일 때만 캐릭터 추가"""
+        scene_lower = scene_prompt.lower()
+
+        # 씬 내용 분석해서 캐릭터 구성 결정
+        has_man = any(word in scene_lower for word in [
+            "man", "boy", "guy", "boyfriend", "husband", "male", "he ", "him",
+            "his", "couple"
+        ])
+        has_two_girls = any(word in scene_lower for word in [
+            "two girls", "2 girls", "friends", "girls talking", "both girls",
+            "2girls"
+        ])
+
+        # 씬에 이미 의상/직업이 있는지 확인
+        has_outfit_in_scene = any(word in scene_lower for word in [
+            "uniform", "dress", "outfit", "wearing", "clothes", "suit",
+            "attendant", "nurse", "maid", "teacher", "student", "office",
+            "bikini", "swimsuit", "pajamas", "coat", "jacket"
+        ])
+
+        # 캐릭터 구성만 결정 (의상은 씬에서 가져옴)
+        if has_man:
+            # 남자가 나오는 씬
+            char = f"1boy 1girl, {self._protagonist}, handsome man"
+        elif has_two_girls:
+            # 여자 둘
+            char = f"2girls, {self._protagonist}, another girl"
+        else:
+            # 기본 1girl
+            char = f"1girl, {self._protagonist}"
+
+        # 씬에 의상이 없으면 랜덤 의상 추가
+        if not has_outfit_in_scene:
+            outfit, _ = self._pick_outfit_and_background()
+            char = f"{char}, {outfit}"
+
+        return char
+
     async def run(
             self,
             prompts: list[str],
             output_dir: Path,
             character_prompt: Optional[str] = None,
-            width: int = 512,  # SD 1.5 기본 해상도
-            height: int = 768,  # 세로로 길게 (쇼츠용)
+            width: int = 512,  # SD 1.5 해상도
+            height: int = 680,  # 더 크롭되게 (위아래 많이 잘림)
     ) -> list[ImageResult]:
         """Generate multiple images for the video"""
+
         self.log(f"Generating {len(prompts)} images...")
+
+        # 🎭 영상마다 주인공 캐릭터 새로 생성 (이 영상 내에서는 고정)
+        self._protagonist = self._create_protagonist()
+        self._protagonist_seed = random.randint(1, 999999)
+        self.log(f"🎲 주인공 seed: {self._protagonist_seed}")
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        base_prompt = character_prompt or self.CHARACTER_BASE_PROMPT
         results = []
 
         # Load pipeline once
@@ -132,10 +245,18 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
                 effect = parts[0].strip()
                 actual_prompt = parts[1].strip()
 
-            # Combine character base + scene-specific prompt
-            full_prompt = f"{base_prompt}, {actual_prompt}"
+            # 씬 내용 분석해서 적절한 캐릭터 구성 선택
+            if character_prompt:
+                char_prompt = character_prompt
+            else:
+                char_prompt = self._pick_character_template(actual_prompt)
+
+            # 프롬프트 순서: 씬 내용 > 캐릭터 > 퀄리티 (CLIP은 앞부분 우선)
+            full_prompt = f"{actual_prompt}, {char_prompt}, {self.QUALITY_PROMPT}"
 
             self.log(f"Generating image {i+1}/{len(prompts)} [{effect}]...")
+            self.log(f"  📝 Scene: {actual_prompt}")
+            self.log(f"  🎨 Full prompt: {full_prompt[:100]}...")
 
             image_path = output_dir / f"image_{i:03d}.png"
 
@@ -169,8 +290,16 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
         prompt: str,
         width: int,
         height: int,
+        use_protagonist_seed: bool = True,
     ) -> Image.Image:
         """Synchronous image generation (called in thread pool)"""
+        # 주인공이 나오는 씬은 같은 seed 사용 (일관성)
+        generator = None
+        if use_protagonist_seed and self._protagonist_seed:
+            # seed에 약간의 변화를 줘서 완전 똑같진 않게
+            seed = self._protagonist_seed + random.randint(0, 100)
+            generator = torch.Generator().manual_seed(seed)
+
         result = pipe(
             prompt=prompt,
             negative_prompt=self.NEGATIVE_PROMPT,
@@ -178,93 +307,38 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
             height=height,
             num_inference_steps=25,
             guidance_scale=7.0,
+            generator=generator,
         )
         return result.images[0]
 
     def _resize_for_shorts(self, image: Image.Image) -> Image.Image:
         """
-        Resize image for YouTube Shorts with safe zone consideration.
-        
-        YouTube Shorts UI overlay:
-        - Top ~15%: 채널명, 팔로우 버튼, 검색 등
-        - Bottom ~20%: 좋아요, 댓글, 공유, 자막 영역
-        
-        전략: 1024x1024 이미지를 중앙에 배치하고 위아래에 블러 배경 추가
+        Resize image for YouTube Shorts - 가로 꽉 채우고 위아래 자르기
         """
         target_w, target_h = 1080, 1920
 
-        # 1. 이미지를 target_w에 맞게 리사이즈 (비율 유지)
         img_w, img_h = image.size
+
+        # 가로를 꽉 채우고 위아래 crop
         scale = target_w / img_w
         new_w = target_w
         new_h = int(img_h * scale)
 
         resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
-        # 2. 새 캔버스 생성 (1080x1920)
-        # 배경: 이미지 가장자리 색상 기반 그라데이션 효과
-        canvas = Image.new('RGB', (target_w, target_h), (20, 20, 25))
+        # 위아래 자르기 (중앙 기준)
+        if new_h > target_h:
+            # 위아래 crop
+            top = (new_h - target_h) // 2
+            cropped = resized.crop((0, top, target_w, top + target_h))
+        else:
+            # 세로가 부족하면 검은 배경에 중앙 배치
+            canvas = Image.new('RGB', (target_w, target_h), (0, 0, 0))
+            y = (target_h - new_h) // 2
+            canvas.paste(resized, (0, y))
+            cropped = canvas
 
-        # 3. 블러된 배경 이미지 생성 (위아래 채우기용)
-        from PIL import ImageFilter
-
-        # 이미지를 전체 캔버스 크기로 늘려서 블러 (배경용)
-        bg_image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
-        bg_blurred = bg_image.filter(ImageFilter.GaussianBlur(radius=30))
-
-        # 블러 배경을 어둡게 (자막 가독성)
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Brightness(bg_blurred)
-        bg_darkened = enhancer.enhance(0.4)  # 40% 밝기
-
-        canvas.paste(bg_darkened, (0, 0))
-
-        # 4. 메인 이미지를 중앙보다 약간 위에 배치 (하단 자막 공간 확보)
-        # 상단 15%, 하단 20% = safe zone 밖
-        # 이미지를 약간 위로 올려서 하단에 자막 공간 확보
-
-        top_margin = int(target_h * 0.12)  # 상단 12% 여백
-        bottom_margin = int(target_h * 0.22)  # 하단 22% 여백 (자막 + UI)
-
-        available_height = target_h - top_margin - bottom_margin
-
-        if new_h > available_height:
-            # 이미지가 safe zone보다 크면 축소
-            scale = available_height / new_h
-            new_w = int(new_w * scale)
-            new_h = int(new_h * scale)
-            resized = image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
-        # 중앙 정렬 (수평), safe zone 내 중앙 (수직)
-        x = (target_w - new_w) // 2
-        y = top_margin + (available_height - new_h) // 2
-
-        canvas.paste(resized, (x, y))
-
-        return canvas
-
-    async def generate_character_sheet(
-        self,
-        character_description: str,
-        output_dir: Path,
-        num_variations: int = 5,
-    ) -> list[ImageResult]:
-        """Generate multiple variations of the same character"""
-
-        expressions = [
-            "happy expression, smiling",
-            "surprised expression, shocked",
-            "thinking expression, curious",
-            "sad expression, melancholy",
-            "excited expression, energetic",
-        ]
-
-        prompts = [
-            f"{character_description}, {expr}"
-            for expr in expressions[:num_variations]
-        ]
-
-        return await self.run(prompts, output_dir)
+        return cropped
 
     async def search_and_download_image(
         self,
@@ -357,14 +431,7 @@ class ImageAgent(BaseAgent[list[ImageResult]]):
             return ImageResult(
                 file_path=result,
                 prompt=f"searched: {search_query}",
-                index=-1,  # 특별 이미지 표시
+                index=-1,
             )
 
         return None
-
-    async def check_connection(self) -> bool:
-        """Check if model is available (local file or can download)"""
-        if self.MODEL_PATH.exists():
-            return True
-        # Can always download from HuggingFace
-        return True

@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, TypeVar, Generic
 
 import boto3
+from botocore.config import Config
 from langchain_aws import ChatBedrock
 from pydantic import BaseModel
 
@@ -28,6 +29,12 @@ class BaseAgent(ABC, Generic[T]):
             client_kwargs["aws_access_key_id"] = settings.aws.access_key_id
             client_kwargs[
                 "aws_secret_access_key"] = settings.aws.secret_access_key
+
+        # 타임아웃 늘리기 (Claude 응답 느릴 수 있음)
+        client_kwargs["config"] = Config(
+            read_timeout=300,  # 5분
+            connect_timeout=60,
+            retries={"max_attempts": 3})
 
         bedrock_client = boto3.client("bedrock-runtime", **client_kwargs)
 

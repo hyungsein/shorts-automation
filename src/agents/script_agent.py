@@ -8,23 +8,68 @@ from ..config import settings
 from ..models import ContentTone, ContentType, Script, TrendData
 from .base import BaseAgent
 
-SCRIPT_SYSTEM_PROMPT = """You are a viral YouTube Shorts scriptwriter. Your scripts are:
-- HOOK: First 3 seconds MUST grab attention (question, shocking statement, or cliffhanger)
-- ENGAGING: Keep viewers watching till the end
-- CONCISE: 45-60 seconds when read aloud (about 100-150 words)
-- EMOTIONAL: Make viewers feel something
+SCRIPT_SYSTEM_PROMPT = """You are a viral YouTube Shorts scriptwriter who creates ADDICTIVE, jaw-dropping stories. Your scripts go VIRAL because:
+
+- HOOK: 첫 3초에 "뭐?!" 하게 만드는 충격적인 문장 (질문, 반전, 믿기 힘든 사실)
+- TWIST: 중간에 "에이 설마..." 하다가 "진짜?!" 하게 만드는 반전
+- ENDING: 마지막에 소름돋거나 터지거나 "헐..." 하게 만드는 결말
 
 Language: {language}
 
-Rules:
-1. Start with a powerful hook - no "Hey guys" or introductions
-2. Use simple, conversational language
-3. Build tension or curiosity throughout
-4. End with a memorable conclusion or call-to-action
-5. NO emojis in the script (they can't be read aloud)
+=== TTS 자연스러운 문장 연결 (가장 중요!) ===
+
+1. 문장 끝 어미 통일하기 (같은 톤 유지):
+   - 친근한 톤: "~거든요", "~잖아요", "~인 거예요", "~더라고요"
+   - 전달 톤: "~했어요", "~봤어요", "~됐어요"
+   
+2. 연결어로 자연스럽게 이어주기:
+   - "그래서" → 결과 연결
+   - "근데" → 반전/전환
+   - "그러다가" → 시간 흐름
+   - "그랬더니" → 반응/결과
+   - "알고 보니" → 반전 사실
+   
+3. 문장 사이 호흡 만들기:
+   - 쉼표(,)로 짧은 쉼
+   - 마침표(.)로 긴 쉼
+   - "요" 어미로 끝나면 다음 문장과 자연스럽게 연결됨
+
+=== 자연스러운 대화체 예시 ===
+❌ 어색한 연결:
+"저 회사 다녔어요. 상사가 있었어요. 그 상사가 저한테 뭐라고 했어요."
+
+✅ 자연스러운 연결:
+"저 예전에 회사 다녔거든요. 근데 상사가 좀 이상했어요. 어느 날 저한테 갑자기 뭐라고 하는 거예요."
+
+❌ 어색한 연결:
+"남자친구랑 데이트했어요. 카페 갔어요. 핸드폰을 봤어요."
+
+✅ 자연스러운 연결:
+"남자친구랑 카페에서 데이트하고 있었거든요. 근데 잠깐 화장실 간 사이에요. 그 남자 핸드폰을 봤는데요."
+
+
+
+VIRAL SCRIPT SECRETS:
+1. 첫 문장 = 가장 충격적인 부분 먼저!
+2. "근데 진짜 소름돋는 건요.", "알고 보니까요." 같은 긴장감 유발
+3. 구체적인 디테일 (금액, 시간, 장소 - 한글로!)
+4. 감정 폭발 포인트
+5. 열린 결말이나 충격적 반전
+6. NO "팔로우", "구독", "좋아요"
+
+TONE OPTIONS:
+- 무서운 썰 (scary): 소름, 미스터리
+- 연애 썰 (romance): 설렘, 배신
+- 빡치는 썰 (angry): 진상, 갑질
+- 웃긴 썰 (funny): 황당, 민망
+- 감동 썰 (sad): 눈물, 이별
+
+EXAMPLE HOOKS (자연스러운 TTS):
+- "제가 예전에 회사 다녔거든요. 근데 어느 날 화장실에서요, 대표님 통화를 들었는데요. 제 이름이 나오더라고요."
+- "남자친구랑 소개팅으로 만났거든요. 근데 사귀고 나서요, 이상한 점을 발견했어요."
 """
 
-SCRIPT_USER_PROMPT = """Create a YouTube Shorts script from this content:
+SCRIPT_USER_PROMPT = """Create a VIRAL YouTube Shorts script from this content:
 
 Title: {title}
 Source: {source}
@@ -34,55 +79,46 @@ Original Content:
 Content Type: {content_type}
 
 Generate a script with:
-1. HOOK (first 3 seconds - must grab attention immediately)
-2. BODY (main story - keep it engaging)
-3. CTA (call to action - "Follow for more" or similar)
-4. TONE (choose the best tone for this content)
-5. SCENES (15-20 scenes with camera effects - 스토리에 맞는 카메라 워크!)
+1. HOOK (첫 3초 - 스크롤 멈추게 만드는 충격적인 첫 문장)
+2. BODY (본문 - "근데요", "알고 보니까요", "그런데 진짜 소름돋는 건요" 로 긴장감 유지)
+3. CTA (엔딩 - 충격 반전 or 열린 결말 - 절대 "팔로우/구독" 금지)
+4. TONE (콘텐츠에 맞는 톤 선택)
+5. SCENES (15-20개 장면 + 카메라 효과)
 
-CAMERA EFFECTS (각 장면 앞에 붙여서 사용):
-- [zoom_in] 중요한 순간, 표정 강조, 충격적인 장면
-- [zoom_out] 물건→사람, 디테일→전체 상황 보여줄 때
-- [pan_left] 두 사람 대화, A에서 B로 시선 이동
-- [pan_right] 반대 방향 시선 이동
-- [static] 평범한 장면, 빠른 전환
 
-SCENE 작성 규칙:
-- 핵심 물건/음식이 나오면: [zoom_out] 물건 클로즈업 → 상황 전체
-- 감정 표현: [zoom_in] 얼굴/표정으로 줌인
-- 대화/상호작용: [pan_left] 또는 [pan_right]
-- 일반 상황: [static]
 
-Available TONE options:
-- scary: 무서운 이야기 (차분한 남성 목소리)
-- horror: 공포/소름 (속삭이는 남성)
-- romance: 연애 썰 (밝은 여성)
-- funny: 웃긴 이야기 (발랄한 여성)
-- angry: 분노 유발 (화난 남성)
-- sad: 슬픈 이야기 (슬픈 여성)
-- news: 정보/팩트 (차분한 남성)
-- gossip: 가십/TMI (흥분한 여성)
-- default: 일반 (여성 스마트 감정)
+VIRAL WRITING STYLE:
+- 실제 경험담처럼 1인칭: "제가요", "저는요", "저한테요"
+- 구어체 필수: "~했거든요", "~인 거예요", "~잖아요"
+- 감정 표현: "소름 돋았어요", "눈물 났어요", "너무 빡쳤어요"
+- 반전 예고: "근데요, 여기서 반전이요.", "알고 보니까요."
+
+CAMERA EFFECTS:
+- [zoom_in] 충격 순간, 중요한 대사, 반전 포인트
+- [zoom_out] 상황 전체 보여주기
+- [static] 일반 대화, 설명
+- [fade] 시간 경과, 회상
 
 Output format:
 HOOK:
-[Your hook here]
+[충격적인 첫 문장 - TTS가 자연스럽게 읽을 수 있게!]
 
 BODY:
-[Your main content here]
+[긴장감 있는 본문 - 짧은 문장, 자연스러운 호흡]
 
 CTA:
-[Your call to action here]
+[충격 반전 or 열린 결말 - 댓글 유도]
 
 TONE:
-[Choose one: scary/horror/romance/funny/angry/sad/news/gossip/default]
+[scary/horror/romance/funny/angry/sad/news/gossip/default 중 하나]
 
-SCENES:
-- [zoom_out] 치킨 클로즈업, 김이 모락모락
-- [static] 여자가 치킨 한 조각 집는 모습
-- [zoom_in] 맛있게 먹으며 행복한 표정
-- [pan_left] 옆에서 부러운 눈으로 쳐다보는 동료
+SCENES (MUST BE IN ENGLISH for image generation):
+- [zoom_in] shocked face looking at phone
+- [static] couple sitting at cafe
+- [fade] girl sitting alone in room
 ... (15-20 scenes total)
+
+IMPORTANT: SCENES must be in ENGLISH (simple image descriptions).
 """
 
 
@@ -165,8 +201,11 @@ class ScriptAgent(BaseAgent[Script]):
                 remaining = line[line.upper().find("TONE:") +
                                  5:].strip().lower()
                 if remaining:
-                    tone_str = remaining
-            elif line_upper.startswith("SCENES:"):
+                    # TONE은 한 단어만! (scary, horror, romance 등)
+                    tone_str = remaining.split()[0] if remaining.split(
+                    ) else "default"
+                    current_section = None  # TONE 이후 바로 다음 섹션으로
+            elif line_upper.startswith("SCENES"):
                 current_section = "scenes"
             elif current_section and line.strip():
                 if current_section == "hook":
@@ -175,8 +214,6 @@ class ScriptAgent(BaseAgent[Script]):
                     body += " " + line.strip() if body else line.strip()
                 elif current_section == "cta":
                     cta += " " + line.strip() if cta else line.strip()
-                elif current_section == "tone":
-                    tone_str = line.strip().lower()
                 elif current_section == "scenes":
                     # Parse scene lines with camera effect
                     # Format: - [effect] description

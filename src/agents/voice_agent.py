@@ -3,6 +3,7 @@
 개인용 API (https://typecast.ai/developers/api)
 """
 
+import random
 from pathlib import Path
 from typing import Literal
 
@@ -58,6 +59,7 @@ class VoiceAgent(BaseAgent[AudioResult]):
             output_path: Path,
             tone: ContentTone = "default",
             voice_name: str = None,  # 직접 목소리 이름 지정 가능
+            voice_id: str = None,  # 직접 voice_id 지정
     ) -> AudioResult:
         """Generate voiceover from script using TypeCast
         
@@ -66,6 +68,7 @@ class VoiceAgent(BaseAgent[AudioResult]):
             output_path: 저장 경로
             tone: 콘텐츠 톤 (scary, romance, funny 등) - 자동 목소리 매칭
             voice_name: 직접 목소리 이름 지정 (예: "Moonjung")
+            voice_id: 직접 voice_id 지정 (예: "tc_65a8c82a7e7bded32947497e")
         """
         self.log("Generating voiceover with TypeCast...")
 
@@ -76,25 +79,30 @@ class VoiceAgent(BaseAgent[AudioResult]):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 목소리 목록 캐시
-        if not self._voices_cache:
-            self._voices_cache = await self.list_voices()
-            if not self._voices_cache:
-                raise ValueError("No TypeCast voices available")
-
         # 목소리 선택
-        if voice_name:
-            # 직접 지정한 경우
-            voice_info = self._find_voice_by_name(voice_name)
-            emotion = "smart"
-        else:
-            # 톤에 맞게 자동 매칭
-            voice_info, emotion = self._match_voice_by_tone(tone)
+        emotion = "smart"
 
-        voice_id = voice_info["voice_id"]
-        self.log(
-            f"Using voice: {voice_info.get('voice_name', voice_id)} (tone: {tone}, emotion: {emotion})"
-        )
+        if voice_id:
+            # voice_id 직접 지정
+            self.log(f"Using voice_id: {voice_id}")
+        elif voice_name:
+            # 이름으로 찾기 (캐시 필요)
+            if not self._voices_cache:
+                self._voices_cache = await self.list_voices()
+            voice_info = self._find_voice_by_name(voice_name)
+            voice_id = voice_info["voice_id"]
+            self.log(f"Using voice: {voice_info.get('voice_name', voice_id)}")
+        else:
+            # 톤에 맞게 자동 매칭 (캐시 필요)
+            if not self._voices_cache:
+                self._voices_cache = await self.list_voices()
+                if not self._voices_cache:
+                    raise ValueError("No TypeCast voices available")
+            voice_info, emotion = self._match_voice_by_tone(tone)
+            voice_id = voice_info["voice_id"]
+            self.log(
+                f"Using voice: {voice_info.get('voice_name', voice_id)} (tone: {tone}, emotion: {emotion})"
+            )
 
         # 감정 프롬프트 설정
         if emotion == "smart":
@@ -140,7 +148,7 @@ class VoiceAgent(BaseAgent[AudioResult]):
         )
 
     def _match_voice_by_tone(self, tone: ContentTone) -> tuple[dict, str]:
-        """콘텐츠 톤에 맞는 목소리 자동 매칭"""
+        """콘텐츠 톤에 맞는 목소리 자동 매칭 (다양성을 위해 랜덤 선택)"""
         gender, age, emotion = TONE_VOICE_MAP.get(tone,
                                                   TONE_VOICE_MAP["default"])
 
@@ -151,21 +159,25 @@ class VoiceAgent(BaseAgent[AudioResult]):
         ]
 
         if candidates:
-            # TikTok/Reels 우선
-            for v in candidates:
-                if "Tiktok/Reels" in v.get("use_cases", []):
-                    return v, emotion
-            return candidates[0], emotion
+            # TikTok/Reels 우선 후보 필터링
+            tiktok_candidates = [
+                v for v in candidates
+                if "Tiktok/Reels" in v.get("use_cases", [])
+            ]
+            if tiktok_candidates:
+                # 랜덤 선택으로 다양성 부여
+                return random.choice(tiktok_candidates), emotion
+            return random.choice(candidates), emotion
 
         # 조건 완화: 성별만 맞춰서 찾기
         candidates = [
             v for v in self._voices_cache if v.get("gender") == gender
         ]
         if candidates:
-            return candidates[0], emotion
+            return random.choice(candidates), emotion
 
-        # 최후의 수단
-        return self._voices_cache[0], emotion
+        # 최후의 수단: 전체 중 랜덤
+        return random.choice(self._voices_cache), emotion
 
     def _find_voice_by_name(self, name: str) -> dict:
         """이름으로 목소리 찾기"""
