@@ -1,13 +1,11 @@
 """
-🎙️ Voice Agent - Generates AI voiceover using TTS
+🎙️ Voice Agent - TypeCast TTS (한국 쇼츠 대중 목소리)
 """
 
 import asyncio
 from pathlib import Path
-from typing import Optional
 
-from elevenlabs import AsyncElevenLabs
-from elevenlabs.core import ApiError
+import httpx
 
 from ..config import settings
 from ..models import AudioResult, Script
@@ -15,116 +13,150 @@ from .base import BaseAgent
 
 
 class VoiceAgent(BaseAgent[AudioResult]):
-    """Agent for generating AI voiceover"""
-    
+    """Agent for generating AI voiceover using TypeCast"""
+
+    API_BASE = "https://typecast.ai/api"
+
     @property
     def name(self) -> str:
         return "🎙️ VoiceAgent"
-    
+
     def __init__(self):
         super().__init__()
-        self.client: Optional[AsyncElevenLabs] = None
-        self._init_client()
-        
-        # Popular voice IDs (ElevenLabs)
-        self.voices = {
-            "adam": "pNInz6obpgDQGcFmaJgB",      # Deep male
-            "rachel": "21m00Tcm4TlvDq8ikWAM",    # Female
-            "domi": "AZnzlk1XvdvUeBnXmlld",      # Female energetic
-            "bella": "EXAVITQu4vr4xnSDxMaL",     # Female soft
-            "antoni": "ErXwobaYiN019PkySvjV",    # Male warm
-            "josh": "TxGEqnHWrfWFTfGW9XjX",      # Male young
-            "arnold": "VR6AewLTigWG4xSOukaG",    # Male deep
-            "sam": "yoZ06aMxZJJ28mfd3POQ",       # Male neutral
+        self.api_token = settings.tts.typecast_api_key
+        self.headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json",
         }
-    
-    def _init_client(self) -> None:
-        """Initialize ElevenLabs client"""
-        if settings.tts.elevenlabs_api_key:
-            self.client = AsyncElevenLabs(
-                api_key=settings.tts.elevenlabs_api_key
-            )
-    
+
+        # 인기 한국어 목소리 (TypeCast에서 actor_id 확인 후 업데이트)
+        # https://biz.typecast.ai 에서 캐릭터 선택 후 API 연동하면 actor_id 확인 가능
+        self.voices = {
+            # 기본값 - TypeCast 가입 후 /api/actor로 조회해서 업데이트 필요
+            "default": None,  # 첫 번째 actor 자동 사용
+        }
+
     async def run(
         self,
         script: Script,
         output_path: Path,
-        voice: str = "adam",
+        voice: str = "default",
     ) -> AudioResult:
-        """Generate voiceover from script"""
-        self.log(f"Generating voiceover with voice: {voice}")
-        
-        if not self.client:
-            raise ValueError("ElevenLabs API key not configured")
-        
-        # Get voice ID
-        voice_id = self.voices.get(voice, voice)
-        
-        # Generate audio
+        """Generate voiceover from script using TypeCast"""
+        self.log("Generating voiceover with TypeCast...")
+
+        if not self.api_token:
+            raise ValueError(
+                "TypeCast API key not configured (TYPECAST_API_KEY)")
+
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        try:
-            audio = await self.client.text_to_speech.convert(
-                voice_id=voice_id,
-                text=script.full_text,
-                model_id="eleven_multilingual_v2",
-                output_format="mp3_44100_128",
+
+        # Get actor_id
+        actor_id = self.voices.get(voice)
+        if not actor_id:
+            # 첫 번째 사용 가능한 actor 가져오기
+            actors = await self.list_actors()
+            if not actors:
+                raise ValueError("No TypeCast actors available")
+            actor_id = actors[0]["actor_id"]
+            self.log(f"Using actor: {actors[0].get('name', actor_id)}")
+
+        # Step 1: Request speech synthesis
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                f"{self.API_BASE}/speak",
+                headers=self.headers,
+                json={
+                    "text": script.full_text,
+                    "lang": "ko-kr",
+                    "actor_id": actor_id,
+                    "xapi_hd": True,  # High quality 44.1kHz
+                    "xapi_audio_format": "mp3",
+                    "model_version": "latest",
+                    "speed_x": 1.0,  # Normal speed
+                    "max_seconds": 60,  # Max 60 seconds
+                },
             )
-            
-            # Save audio file
-            audio_bytes = b""
-            async for chunk in audio:
-                audio_bytes += chunk
-            
+            response.raise_for_status()
+            speak_url = response.json()["result"]["speak_v2_url"]
+
+        # Step 2: Poll until done
+        self.log("Waiting for synthesis...")
+        audio_url = await self._poll_for_result(speak_url)
+
+        # Step 3: Download audio
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.get(audio_url)
+            response.raise_for_status()
+
             with open(output_path, "wb") as f:
-                f.write(audio_bytes)
-            
-            # Get duration (estimate based on text length)
-            # Average speaking rate: ~150 words per minute
-            word_count = len(script.full_text.split())
-            duration = (word_count / 150) * 60
-            
-            self.log(f"Audio saved: {output_path} ({duration:.1f}s)")
-            
-            return AudioResult(
-                file_path=output_path,
-                duration=duration,
-                voice_id=voice_id,
-            )
-            
-        except ApiError as e:
-            self.log(f"ElevenLabs API error: {e}")
-            raise
-    
-    async def list_voices(self) -> list[dict]:
-        """List available voices"""
-        if not self.client:
+                f.write(response.content)
+
+        # Estimate duration (Korean ~3 chars per second)
+        char_count = len(script.full_text.replace(" ", ""))
+        duration = char_count / 3.0
+
+        self.log(f"Audio saved: {output_path} (~{duration:.1f}s)")
+
+        return AudioResult(
+            file_path=output_path,
+            duration=duration,
+            voice_id=actor_id,
+        )
+
+    async def _poll_for_result(self,
+                               speak_url: str,
+                               max_attempts: int = 60) -> str:
+        """Poll TypeCast API until audio is ready"""
+        async with httpx.AsyncClient(timeout=30) as client:
+            for attempt in range(max_attempts):
+                response = await client.get(speak_url, headers=self.headers)
+                response.raise_for_status()
+
+                result = response.json()["result"]
+                status = result["status"]
+
+                if status == "done":
+                    return result["audio_download_url"]
+                elif status == "failed":
+                    raise RuntimeError("TypeCast synthesis failed")
+
+                # Wait 1 second before next poll
+                await asyncio.sleep(1)
+
+        raise TimeoutError("TypeCast synthesis timed out")
+
+    async def list_actors(self) -> list[dict]:
+        """List available TypeCast actors (voices)"""
+        if not self.api_token:
             return []
-        
+
         try:
-            response = await self.client.voices.get_all()
-            return [
-                {
-                    "voice_id": v.voice_id,
-                    "name": v.name,
-                    "category": v.category,
-                }
-                for v in response.voices
-            ]
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{self.API_BASE}/actor",
+                    headers=self.headers,
+                )
+                response.raise_for_status()
+                return response.json()["result"]
         except Exception as e:
-            self.log(f"Error listing voices: {e}")
+            self.log(f"Error listing actors: {e}")
             return []
-    
-    async def get_remaining_characters(self) -> int:
-        """Get remaining character quota"""
-        if not self.client:
-            return 0
-        
+
+    async def get_account_info(self) -> dict:
+        """Get TypeCast account info"""
+        if not self.api_token:
+            return {}
+
         try:
-            user = await self.client.user.get()
-            subscription = user.subscription
-            return subscription.character_limit - subscription.character_count
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{self.API_BASE}/me",
+                    headers=self.headers,
+                )
+                response.raise_for_status()
+                return response.json()["result"]
         except Exception as e:
-            self.log(f"Error getting quota: {e}")
-            return 0
+            self.log(f"Error getting account info: {e}")
+            return {}

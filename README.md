@@ -16,8 +16,8 @@ AI-powered YouTube Shorts automation with **LangGraph** + **Supervisor Agent**
 └───────┘ └───────┘ └─────────┘ └─────────┘ └─────────┘ └───────┘
     │         │           │           │
     ▼         ▼           ▼           ▼
- Reddit    Claude    Stable       ElevenLabs
-  API      Sonnet    Diffusion      TTS
+ Reddit    Claude    Stable       TypeCast
+  API      Sonnet    Diffusion    (한국어 TTS)
             4.5      (Local)
 ```
 
@@ -93,7 +93,7 @@ shorts-automation/
 | Service | Purpose | Get it at |
 |---------|---------|-----------|
 | AWS Bedrock | Claude Sonnet 4.5 | [AWS Console](https://console.aws.amazon.com/bedrock) |
-| ElevenLabs | TTS (한국어 지원) | [elevenlabs.io](https://elevenlabs.io) |
+| TypeCast | TTS (한국 쇼츠 "그 목소리") | [biz.typecast.ai](https://biz.typecast.ai) |
 | Reddit | 콘텐츠 수집 | [reddit.com/prefs/apps](https://reddit.com/prefs/apps) |
 
 ## 👨‍💼 Supervisor Mode
@@ -120,9 +120,9 @@ python -m src.main generate -t reddit_story --no-strict
 | Service | Monthly Cost |
 |---------|-------------|
 | AWS Bedrock (Claude) | ~$10 |
-| ElevenLabs (Creator) | $22 |
+| TypeCast (Starter) | $9 (2시간/월) |
 | Stable Diffusion | $0 (로컬) |
-| **Total** | **~$32/월** |
+| **Total** | **~$19/월** |
 
 ## ⚠️ Disclaimer
 

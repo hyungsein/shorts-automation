@@ -25,10 +25,10 @@ class AWSConfig(BaseModel):
 
 
 class TTSConfig(BaseModel):
-    """ElevenLabs TTS Configuration"""
-    elevenlabs_api_key: str = Field(
-        default_factory=lambda: os.getenv("ELEVENLABS_API_KEY", ""))
-    default_voice: str = Field(default="adam")
+    """TypeCast TTS Configuration (한국 쇼츠 대중 목소리)"""
+    typecast_api_key: str = Field(
+        default_factory=lambda: os.getenv("TYPECAST_API_KEY", ""))
+    default_voice: str = Field(default="default")
 
 
 class RedditConfig(BaseModel):

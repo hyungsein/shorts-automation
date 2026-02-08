@@ -94,14 +94,13 @@ def config():
         Panel.fit(
             f"[bold]⚙️ Configuration[/bold]\n\n"
             f"Output Dir: {settings.output_dir}\n"
-            f"Shorts/Day: {settings.shorts_per_day}\n"
             f"Language: {settings.default_language}\n"
             f"TTS Voice: {settings.tts.default_voice}\n\n"
             f"[dim]API Keys configured:[/dim]\n"
-            f"  AWS Bedrock: {'✅' if settings.aws.access_key_id else '❌'}\n"
-            f"  ElevenLabs: {'✅' if settings.tts.elevenlabs_api_key else '❌'}\n"
+            f"  AWS Bedrock: {'✅' if settings.aws.access_key_id else '⚡ (CLI)'}\n"
+            f"  TypeCast: {'✅' if settings.tts.typecast_api_key else '❌'}\n"
             f"  Reddit: {'✅' if settings.reddit.client_id else '❌'}\n"
-            f"  Stable Diffusion: {'✅' if settings.stable_diffusion.api_url else '❌'}",
+            f"  Stable Diffusion: {'✅' if settings.sd.api_url else '❌'}",
             title="Settings",
         ))
 
